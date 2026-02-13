@@ -1198,6 +1198,108 @@ app.post("/setup/import", requireSetupAuth, async (req, res) => {
   }
 });
 
+// ──── Fireflies Webhook Handler ────────────────────────────────────────────
+// Receives "Transcription Completed" events from Fireflies.ai and notifies
+// Xavier via Slack DM so it can fetch + analyze the transcript.
+app.post("/webhooks/fireflies", express.json(), async (req, res) => {
+  try {
+    // Verify webhook secret (Fireflies sends it in the Authorization header)
+    const webhookSecret = process.env.FIREFLIES_WEBHOOK_SECRET;
+    if (webhookSecret) {
+      const authHeader = req.headers["authorization"] || "";
+      const secretHeader = req.headers["x-webhook-secret"] || "";
+      const tokenParam = req.query?.token || "";
+      // Accept secret via Authorization header, custom header, or query param
+      const provided = authHeader.replace(/^Bearer\s+/i, "") || secretHeader || tokenParam;
+      if (provided !== webhookSecret) {
+        console.warn("[fireflies-webhook] Invalid secret, rejecting request");
+        return res.status(401).json({ ok: false, error: "unauthorized" });
+      }
+    }
+
+    const body = req.body || {};
+    const txId = body.meetingId || body.transcript_id || body.id || "unknown";
+    console.log("[fireflies-webhook] Event received:", JSON.stringify(body).slice(0, 500));
+
+    // Read Slack bot token from OpenClaw config
+    // STATE_DIR is already /data/.openclaw — config lives directly inside it
+    const cfgPath = path.join(STATE_DIR, "openclaw.json");
+    let slackBotToken;
+    try {
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+      slackBotToken = cfg?.channels?.slack?.botToken;
+    } catch (_e) {
+      console.error("[fireflies-webhook] Could not read config");
+    }
+
+    if (!slackBotToken) {
+      console.error("[fireflies-webhook] No Slack bot token found in config");
+      return res.json({ ok: true, note: "no slack token, event logged" });
+    }
+
+    // Slack API helper
+    const https = await import("node:https");
+    const slackApi = (method, payload) =>
+      new Promise((resolve, reject) => {
+        const data = JSON.stringify(payload);
+        const r = https.default.request(
+          {
+            hostname: "slack.com",
+            path: `/api/${method}`,
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${slackBotToken}`,
+              "Content-Length": Buffer.byteLength(data),
+            },
+          },
+          (resp) => {
+            const chunks = [];
+            resp.on("data", (c) => chunks.push(c));
+            resp.on("end", () => {
+              try {
+                resolve(JSON.parse(Buffer.concat(chunks).toString()));
+              } catch (e) {
+                reject(e);
+              }
+            });
+          },
+        );
+        r.on("error", reject);
+        r.write(data);
+        r.end();
+      });
+
+    // Open DM channel with Ron (U02DV3SD0R5) where Xavier bot lives
+    const dm = await slackApi("conversations.open", {
+      users: "U02DV3SD0R5",
+    });
+
+    if (dm.ok && dm.channel) {
+      await slackApi("chat.postMessage", {
+        channel: dm.channel.id,
+        text: [
+          `:studio_microphone: *New Fireflies transcript ready*`,
+          `Transcript ID: \`${txId}\``,
+          ``,
+          `Please fetch this transcript using the Fireflies API and perform`,
+          `a deep analysis following the workflow in FIREFLIES.md.`,
+          `Store the analysis in meetings/${txId}.md`,
+        ].join("\n"),
+      });
+      console.log("[fireflies-webhook] Notified Xavier via Slack DM, transcript:", txId);
+    } else {
+      console.error("[fireflies-webhook] Could not open DM:", dm.error);
+    }
+
+    res.json({ ok: true, transcript: txId });
+  } catch (err) {
+    console.error("[fireflies-webhook] Error:", err.message);
+    res.json({ ok: true, note: "error handled" });
+  }
+});
+// ──── End Fireflies Webhook ───────────────────────────────────────────────
+
 // Proxy everything else to the gateway.
 const proxy = httpProxy.createProxyServer({
   target: GATEWAY_TARGET,
