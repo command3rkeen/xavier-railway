@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "linear": {
+      "command": "npx",
+      "args": ["-y", "linear-mcp"]
+    },
+    "posthog": {
+      "command": "npx",
+      "args": ["-y", "@andrew_eragon/mcp-server-posthog"]
+    }
+  },
+  "imports": []
+}
