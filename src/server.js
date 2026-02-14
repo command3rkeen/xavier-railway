@@ -1022,7 +1022,11 @@ app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
     }
     if (cmd === "openclaw.logs.tail") {
       const lines = Math.max(50, Math.min(1000, Number.parseInt(arg || "200", 10) || 200));
-      const r = await runCmd(OPENCLAW_NODE, clawArgs(["logs", "--tail", String(lines)]));
+      // v2026.2.12 changed --tail to --last; try both forms.
+      let r = await runCmd(OPENCLAW_NODE, clawArgs(["logs", "--last", String(lines)]));
+      if (r.code !== 0 && /unknown option/i.test(r.output)) {
+        r = await runCmd(OPENCLAW_NODE, clawArgs(["logs", "--tail", String(lines)]));
+      }
       return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: redactSecrets(r.output) });
     }
     if (cmd === "openclaw.config.get") {
@@ -1093,9 +1097,18 @@ app.get("/setup/api/config/raw", requireSetupAuth, async (_req, res) => {
 
 app.post("/setup/api/config/raw", requireSetupAuth, async (req, res) => {
   try {
-    const content = String((req.body && req.body.content) || "");
+    const raw = req.body && req.body.content;
+    if (raw == null || raw === "") {
+      return res.status(400).json({ ok: false, error: "Missing 'content' field (must be a JSON string)" });
+    }
+    const content = String(raw);
     if (content.length > 500_000) {
       return res.status(413).json({ ok: false, error: "Config too large" });
+    }
+
+    // Validate JSON before writing to prevent corruption.
+    try { JSON.parse(content); } catch (parseErr) {
+      return res.status(400).json({ ok: false, error: `Invalid JSON: ${parseErr.message}` });
     }
 
     fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -1107,7 +1120,10 @@ app.post("/setup/api/config/raw", requireSetupAuth, async (req, res) => {
       fs.copyFileSync(p, backupPath);
     }
 
-    fs.writeFileSync(p, content, { encoding: "utf8", mode: 0o600 });
+    // Atomic write: temp file then rename.
+    const tmpPath = `${p}.tmp-${Date.now()}`;
+    fs.writeFileSync(tmpPath, content, { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(tmpPath, p);
 
     // Apply immediately.
     if (isConfigured()) {
