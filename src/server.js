@@ -221,7 +221,10 @@ function patchConfigFromEnv() {
   );
 
   if (changed) {
-    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), { encoding: "utf8", mode: 0o600 });
+    // Atomic write: write to temp file then rename to avoid truncation on crash.
+    const tmpPath = `${cfgPath}.tmp-${Date.now()}`;
+    fs.writeFileSync(tmpPath, JSON.stringify(cfg, null, 2), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(tmpPath, cfgPath);
     console.log("[config-patch] openclaw.json updated from env vars");
   }
 }
@@ -745,6 +748,12 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
     const payload = req.body || {};
 
+    // Auto-populate Anthropic API key from env if not provided in payload.
+    if (!payload.authSecret && process.env.ANTHROPIC_API_KEY) {
+      payload.authChoice = payload.authChoice || "apiKey";
+      payload.authSecret = process.env.ANTHROPIC_API_KEY;
+    }
+
     let onboardArgs;
     try {
       onboardArgs = buildOnboardArgs(payload);
@@ -957,6 +966,7 @@ const ALLOWED_CONSOLE_COMMANDS = new Set([
   "openclaw.doctor",
   "openclaw.logs.tail",
   "openclaw.config.get",
+  "openclaw.config.set",
 
   // Device management (for fixing "disconnected (1008): pairing required")
   "openclaw.devices.list",
@@ -1035,6 +1045,19 @@ app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
         return res.status(400).json({ ok: false, error: "Invalid device request ID" });
       }
       const r = await runCmd(OPENCLAW_NODE, clawArgs(["devices", "approve", requestId]));
+      return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: redactSecrets(r.output) });
+    }
+
+    // Config set command
+    if (cmd === "openclaw.config.set") {
+      // arg format: "key value" (e.g., "agents.defaults.model claude-opus-4-6")
+      const parts = arg.split(/\s+/);
+      const key = parts[0] || "";
+      const value = parts.slice(1).join(" ");
+      if (!key || !value) return res.status(400).json({ ok: false, error: "Usage: openclaw.config.set key value" });
+      // Validate key format (dotted path, alphanumeric)
+      if (!/^[A-Za-z0-9._-]+$/.test(key)) return res.status(400).json({ ok: false, error: "Invalid config key" });
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", key, value]));
       return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: redactSecrets(r.output) });
     }
 
