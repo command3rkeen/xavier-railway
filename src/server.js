@@ -1053,6 +1053,41 @@ const RAILWAY_OAUTH_SCOPES = "openid offline_access project:viewer";
 const RAILWAY_OAUTH_AUTH_URL = "https://railway.com/oauth/authorize";
 const RAILWAY_OAUTH_TOKEN_URL = "https://railway.com/oauth/token";
 
+// Hard allowlist — tokens with ANY scope outside this set are rejected.
+// This prevents scope escalation even if the OAuth app config is changed.
+const RAILWAY_OAUTH_ALLOWED_SCOPES = new Set([
+  "openid",
+  "offline_access",
+  "project:viewer",
+  "email",
+  "profile",
+]);
+const RAILWAY_OAUTH_FORBIDDEN_SCOPES = new Set([
+  "project:member",
+  "project:admin",
+  "workspace:member",
+  "workspace:admin",
+]);
+
+function validateRailwayScopes(scopeString) {
+  if (!scopeString) return { ok: false, reason: "No scopes returned" };
+  const granted = scopeString.split(/\s+/).filter(Boolean);
+
+  // Reject if any forbidden scope is present.
+  const forbidden = granted.filter((s) => RAILWAY_OAUTH_FORBIDDEN_SCOPES.has(s));
+  if (forbidden.length > 0) {
+    return { ok: false, reason: `Forbidden scope(s) granted: ${forbidden.join(", ")}. Refusing token.` };
+  }
+
+  // Reject if any scope is not in the allowlist.
+  const unknown = granted.filter((s) => !RAILWAY_OAUTH_ALLOWED_SCOPES.has(s));
+  if (unknown.length > 0) {
+    return { ok: false, reason: `Unknown scope(s) granted: ${unknown.join(", ")}. Refusing token.` };
+  }
+
+  return { ok: true, scopes: granted };
+}
+
 // In-memory CSRF state store (short-lived, cleared after use).
 const _oauthPendingStates = new Map();
 
@@ -1099,6 +1134,15 @@ async function refreshRailwayToken() {
   }
 
   const fresh = await res.json();
+
+  // Validate scopes on every refresh — catch escalation even after initial auth.
+  const scopeCheck = validateRailwayScopes(fresh.scope || tokens.scopes);
+  if (!scopeCheck.ok) {
+    console.error(`[railway-oauth] SCOPE VIOLATION on refresh: ${scopeCheck.reason}. Deleting tokens.`);
+    try { fs.rmSync(RAILWAY_OAUTH_TOKEN_FILE, { force: true }); } catch {}
+    return null;
+  }
+
   const merged = {
     access_token: fresh.access_token,
     refresh_token: fresh.refresh_token || tokens.refresh_token,
@@ -1177,17 +1221,33 @@ app.get("/setup/oauth/railway/callback", async (req, res) => {
     }
 
     const data = await tokenRes.json();
+
+    // CRITICAL: Validate scopes before storing. Reject any escalation.
+    const scopeCheck = validateRailwayScopes(data.scope);
+    if (!scopeCheck.ok) {
+      console.error(`[railway-oauth] SCOPE VIOLATION: ${scopeCheck.reason}`);
+      return res.status(403).type("text/html").send(`
+        <h2>Scope violation — token rejected</h2>
+        <p><strong>${scopeCheck.reason}</strong></p>
+        <p>Xavier only accepts <code>project:viewer</code> (read-only) access.
+           The OAuth app may have been misconfigured with elevated permissions.</p>
+        <p>Fix: Edit the Railway OAuth app to only allow <code>project:viewer</code> scope, then try again.</p>
+        <p><a href="/setup">Back to Setup</a></p>
+      `);
+    }
+
     saveRailwayTokens({
       access_token: data.access_token,
       refresh_token: data.refresh_token,
       expires_at: Date.now() + (data.expires_in || 3600) * 1000,
-      scopes: data.scope || RAILWAY_OAUTH_SCOPES,
+      scopes: data.scope,
       obtained_at: new Date().toISOString(),
     });
 
     res.type("text/html").send(`
       <h2>Railway OAuth connected!</h2>
       <p>Xavier now has <strong>read-only</strong> access (project:viewer) to your Railway projects.</p>
+      <p>Granted scopes: <code>${data.scope}</code></p>
       <p>Tokens stored securely. Access token auto-refreshes every hour.</p>
       <p><a href="/setup">Back to Setup</a></p>
     `);
