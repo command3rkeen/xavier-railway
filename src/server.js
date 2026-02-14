@@ -374,10 +374,9 @@ app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
 
 // Minimal health endpoint for Railway.
-app.get("/setup/healthz", (req, res) => {
-  if (!SETUP_ENABLED && !isLoopbackRequest(req)) return res.status(404).type("text/plain").send("Not found");
-  res.json({ ok: true });
-});
+// Never gated by SETUP_ENABLED — health checks must always respond so Railway
+// doesn't kill the container.  This endpoint is harmless (no secrets).
+app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
 
 // Public health endpoint (no auth) so Railway can probe without /setup.
 // Keep this free of secrets.
