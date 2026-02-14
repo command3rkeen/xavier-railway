@@ -975,6 +975,9 @@ const ALLOWED_CONSOLE_COMMANDS = new Set([
   // Plugin management
   "openclaw.plugins.list",
   "openclaw.plugins.enable",
+
+  // System events (trigger agent actions)
+  "openclaw.system.event",
 ]);
 
 app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
@@ -1075,6 +1078,16 @@ app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
       if (!name) return res.status(400).json({ ok: false, error: "Missing plugin name" });
       if (!/^[A-Za-z0-9_-]+$/.test(name)) return res.status(400).json({ ok: false, error: "Invalid plugin name" });
       const r = await runCmd(OPENCLAW_NODE, clawArgs(["plugins", "enable", name]));
+      return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: redactSecrets(r.output) });
+    }
+
+    // System event: inject a message into the agent's main session.
+    // Usage: openclaw.system.event <text>
+    // --mode now triggers immediate heartbeat processing.
+    if (cmd === "openclaw.system.event") {
+      const text = String(arg || "").trim();
+      if (!text) return res.status(400).json({ ok: false, error: "Missing event text" });
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(["system", "event", "--text", text, "--mode", "now"]));
       return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: redactSecrets(r.output) });
     }
 
