@@ -1045,6 +1045,197 @@ app.post("/setup/api/devices/approve", requireSetupAuth, async (req, res) => {
   return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: redactSecrets(r.output) });
 });
 
+// ─── Railway OAuth (read-only project:viewer access) ─────────────────────────
+const RAILWAY_OAUTH_CLIENT_ID = process.env.RAILWAY_OAUTH_CLIENT_ID?.trim();
+const RAILWAY_OAUTH_CLIENT_SECRET = process.env.RAILWAY_OAUTH_CLIENT_SECRET?.trim();
+const RAILWAY_OAUTH_TOKEN_FILE = path.join(STATE_DIR, "railway-oauth.json");
+const RAILWAY_OAUTH_SCOPES = "openid offline_access project:viewer";
+const RAILWAY_OAUTH_AUTH_URL = "https://railway.com/oauth/authorize";
+const RAILWAY_OAUTH_TOKEN_URL = "https://railway.com/oauth/token";
+
+// In-memory CSRF state store (short-lived, cleared after use).
+const _oauthPendingStates = new Map();
+
+function railwayOAuthRedirectUri(req) {
+  const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  return `${proto}://${host}/setup/oauth/railway/callback`;
+}
+
+function loadRailwayTokens() {
+  try {
+    return JSON.parse(fs.readFileSync(RAILWAY_OAUTH_TOKEN_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function saveRailwayTokens(tokens) {
+  fs.mkdirSync(path.dirname(RAILWAY_OAUTH_TOKEN_FILE), { recursive: true });
+  fs.writeFileSync(RAILWAY_OAUTH_TOKEN_FILE, JSON.stringify(tokens, null, 2), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+}
+
+async function refreshRailwayToken() {
+  const tokens = loadRailwayTokens();
+  if (!tokens?.refresh_token) return null;
+
+  const res = await fetch(RAILWAY_OAUTH_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: RAILWAY_OAUTH_CLIENT_ID,
+      client_secret: RAILWAY_OAUTH_CLIENT_SECRET,
+      refresh_token: tokens.refresh_token,
+    }),
+  });
+
+  if (!res.ok) {
+    console.error(`[railway-oauth] refresh failed: ${res.status} ${await res.text()}`);
+    return null;
+  }
+
+  const fresh = await res.json();
+  const merged = {
+    access_token: fresh.access_token,
+    refresh_token: fresh.refresh_token || tokens.refresh_token,
+    expires_at: Date.now() + (fresh.expires_in || 3600) * 1000,
+    scopes: fresh.scope || tokens.scopes,
+    obtained_at: new Date().toISOString(),
+  };
+  saveRailwayTokens(merged);
+  return merged;
+}
+
+// Step 1: Redirect admin to Railway's authorization page.
+app.get("/setup/oauth/railway/authorize", requireSetupAuth, (req, res) => {
+  if (!RAILWAY_OAUTH_CLIENT_ID) {
+    return res.status(500).json({ ok: false, error: "RAILWAY_OAUTH_CLIENT_ID not set" });
+  }
+
+  const state = crypto.randomBytes(16).toString("hex");
+  // Store state in memory for CSRF protection (expires in 10 min).
+  _oauthPendingStates.set(state, Date.now() + 600_000);
+  // Prune expired states.
+  for (const [k, exp] of _oauthPendingStates) {
+    if (Date.now() > exp) _oauthPendingStates.delete(k);
+  }
+
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: RAILWAY_OAUTH_CLIENT_ID,
+    redirect_uri: railwayOAuthRedirectUri(req),
+    scope: RAILWAY_OAUTH_SCOPES,
+    state,
+  });
+
+  res.redirect(`${RAILWAY_OAUTH_AUTH_URL}?${params}`);
+});
+
+// Step 2: Handle callback, exchange code for tokens.
+app.get("/setup/oauth/railway/callback", async (req, res) => {
+  const { code, state, error } = req.query;
+
+  if (error) {
+    return res.status(400).type("text/plain").send(`OAuth error: ${error}`);
+  }
+  if (!code) {
+    return res.status(400).type("text/plain").send("Missing authorization code");
+  }
+
+  // Verify CSRF state from in-memory store.
+  const stateExp = _oauthPendingStates.get(state);
+  if (!stateExp || Date.now() > stateExp) {
+    _oauthPendingStates.delete(state);
+    return res.status(403).type("text/plain").send("State mismatch or expired — possible CSRF. Try again.");
+  }
+  _oauthPendingStates.delete(state);
+
+  if (!RAILWAY_OAUTH_CLIENT_ID || !RAILWAY_OAUTH_CLIENT_SECRET) {
+    return res.status(500).type("text/plain").send("OAuth client credentials not configured");
+  }
+
+  try {
+    const tokenRes = await fetch(RAILWAY_OAUTH_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: RAILWAY_OAUTH_CLIENT_ID,
+        client_secret: RAILWAY_OAUTH_CLIENT_SECRET,
+        redirect_uri: railwayOAuthRedirectUri(req),
+        code,
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      const body = await tokenRes.text();
+      return res.status(502).type("text/plain").send(`Token exchange failed: ${tokenRes.status}\n${body}`);
+    }
+
+    const data = await tokenRes.json();
+    saveRailwayTokens({
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: Date.now() + (data.expires_in || 3600) * 1000,
+      scopes: data.scope || RAILWAY_OAUTH_SCOPES,
+      obtained_at: new Date().toISOString(),
+    });
+
+    res.type("text/html").send(`
+      <h2>Railway OAuth connected!</h2>
+      <p>Xavier now has <strong>read-only</strong> access (project:viewer) to your Railway projects.</p>
+      <p>Tokens stored securely. Access token auto-refreshes every hour.</p>
+      <p><a href="/setup">Back to Setup</a></p>
+    `);
+  } catch (err) {
+    res.status(500).type("text/plain").send(`OAuth callback error: ${String(err)}`);
+  }
+});
+
+// API: Get current Railway token (for Xavier's skill to use).
+// Returns the access token, auto-refreshing if expired.
+app.get("/setup/api/railway/token", requireSetupAuth, async (_req, res) => {
+  let tokens = loadRailwayTokens();
+
+  if (!tokens?.access_token) {
+    return res.status(404).json({ ok: false, error: "Railway not connected. Visit /setup/oauth/railway/authorize" });
+  }
+
+  // Auto-refresh if expired (with 60s buffer).
+  if (tokens.expires_at && Date.now() > tokens.expires_at - 60_000) {
+    tokens = await refreshRailwayToken();
+    if (!tokens) {
+      return res.status(502).json({ ok: false, error: "Token refresh failed. Re-authorize at /setup/oauth/railway/authorize" });
+    }
+  }
+
+  res.json({
+    ok: true,
+    access_token: tokens.access_token,
+    expires_at: tokens.expires_at,
+    scopes: tokens.scopes,
+  });
+});
+
+// API: Railway OAuth status (no token exposed).
+app.get("/setup/api/railway/status", requireSetupAuth, (_req, res) => {
+  const tokens = loadRailwayTokens();
+  res.json({
+    ok: true,
+    connected: !!tokens?.access_token,
+    scopes: tokens?.scopes || null,
+    obtained_at: tokens?.obtained_at || null,
+    expires_at: tokens?.expires_at || null,
+    expired: tokens?.expires_at ? Date.now() > tokens.expires_at : null,
+  });
+});
+
+// ─── End Railway OAuth ───────────────────────────────────────────────────────
+
 app.post("/setup/api/reset", requireSetupAuth, async (_req, res) => {
   // Minimal reset: delete the config file so /setup can rerun.
   // Keep credentials/sessions/workspace by default.
