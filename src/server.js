@@ -329,7 +329,23 @@ async function restartGateway() {
   return ensureGatewayRunning();
 }
 
+// Kill switch: set SETUP_ENABLED=true in Railway env vars to unlock /setup.
+// When disabled (default), all /setup endpoints return 404 as if they don't exist.
+// Exception: loopback requests (from Xavier itself inside the container) are always allowed.
+const SETUP_ENABLED = (process.env.SETUP_ENABLED || "").trim().toLowerCase() === "true";
+
+function isLoopbackRequest(req) {
+  const ip = req.ip || req.connection?.remoteAddress || "";
+  return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+}
+
 function requireSetupAuth(req, res, next) {
+  // Kill switch — /setup is invisible unless explicitly enabled.
+  // Allow loopback (Xavier's own skill calls from inside the container).
+  if (!SETUP_ENABLED && !isLoopbackRequest(req)) {
+    return res.status(404).type("text/plain").send("Not found");
+  }
+
   if (!SETUP_PASSWORD) {
     return res
       .status(500)
@@ -358,7 +374,10 @@ app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
 
 // Minimal health endpoint for Railway.
-app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
+app.get("/setup/healthz", (req, res) => {
+  if (!SETUP_ENABLED && !isLoopbackRequest(req)) return res.status(404).type("text/plain").send("Not found");
+  res.json({ ok: true });
+});
 
 // Public health endpoint (no auth) so Railway can probe without /setup.
 // Keep this free of secrets.
@@ -1258,6 +1277,8 @@ app.get("/setup/oauth/railway/authorize", requireSetupAuth, (req, res) => {
 
 // Step 2: Handle callback, exchange code for tokens.
 app.get("/setup/oauth/railway/callback", async (req, res) => {
+  if (!SETUP_ENABLED && !isLoopbackRequest(req)) return res.status(404).type("text/plain").send("Not found");
+
   const { code, state, error } = req.query;
 
   if (error) {
@@ -1678,6 +1699,11 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
   console.log(`[wrapper] gateway target: ${GATEWAY_TARGET}`);
   if (!SETUP_PASSWORD) {
     console.warn("[wrapper] WARNING: SETUP_PASSWORD is not set; /setup will error.");
+  }
+  if (!SETUP_ENABLED) {
+    console.log("[wrapper] /setup is DISABLED (set SETUP_ENABLED=true to unlock)");
+  } else {
+    console.warn("[wrapper] /setup is ENABLED — disable when not administering (unset SETUP_ENABLED)");
   }
 
   // Auto-start the gateway if already configured so polling channels (Telegram/Discord/etc.)
