@@ -1050,8 +1050,8 @@ const RAILWAY_OAUTH_CLIENT_ID = process.env.RAILWAY_OAUTH_CLIENT_ID?.trim();
 const RAILWAY_OAUTH_CLIENT_SECRET = process.env.RAILWAY_OAUTH_CLIENT_SECRET?.trim();
 const RAILWAY_OAUTH_TOKEN_FILE = path.join(STATE_DIR, "railway-oauth.json");
 const RAILWAY_OAUTH_SCOPES = "openid offline_access project:viewer";
-const RAILWAY_OAUTH_AUTH_URL = "https://railway.com/oauth/authorize";
-const RAILWAY_OAUTH_TOKEN_URL = "https://railway.com/oauth/token";
+const RAILWAY_OAUTH_AUTH_URL = "https://backboard.railway.com/oauth/auth";
+const RAILWAY_OAUTH_TOKEN_URL = "https://backboard.railway.com/oauth/token";
 
 // Hard allowlist — tokens with ANY scope outside this set are rejected.
 // This prevents scope escalation even if the OAuth app config is changed.
@@ -1088,7 +1088,17 @@ function validateRailwayScopes(scopeString) {
   return { ok: true, scopes: granted };
 }
 
-// In-memory CSRF state store (short-lived, cleared after use).
+// PKCE (Proof Key for Code Exchange) — strongly recommended by Railway for web apps.
+// The code_verifier stays server-side; only the code_challenge travels through the redirect.
+function generateCodeVerifier() {
+  return crypto.randomBytes(32).toString("base64url"); // 43 chars, URL-safe
+}
+function deriveCodeChallenge(verifier) {
+  return crypto.createHash("sha256").update(verifier).digest("base64url");
+}
+
+// In-memory CSRF + PKCE state store (short-lived, cleared after use).
+// Maps state → { expiresAt, codeVerifier }
 const _oauthPendingStates = new Map();
 
 function railwayOAuthRedirectUri(req) {
@@ -1117,13 +1127,16 @@ async function refreshRailwayToken() {
   const tokens = loadRailwayTokens();
   if (!tokens?.refresh_token) return null;
 
+  const basicAuth = Buffer.from(`${RAILWAY_OAUTH_CLIENT_ID}:${RAILWAY_OAUTH_CLIENT_SECRET}`).toString("base64");
+
   const res = await fetch(RAILWAY_OAUTH_TOKEN_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Authorization": `Basic ${basicAuth}`,
+    },
     body: new URLSearchParams({
       grant_type: "refresh_token",
-      client_id: RAILWAY_OAUTH_CLIENT_ID,
-      client_secret: RAILWAY_OAUTH_CLIENT_SECRET,
       refresh_token: tokens.refresh_token,
     }),
   });
@@ -1161,11 +1174,14 @@ app.get("/setup/oauth/railway/authorize", requireSetupAuth, (req, res) => {
   }
 
   const state = crypto.randomBytes(16).toString("hex");
-  // Store state in memory for CSRF protection (expires in 10 min).
-  _oauthPendingStates.set(state, Date.now() + 600_000);
+  const codeVerifier = generateCodeVerifier();
+  const codeChallenge = deriveCodeChallenge(codeVerifier);
+
+  // Store state + PKCE verifier in memory (expires in 10 min).
+  _oauthPendingStates.set(state, { expiresAt: Date.now() + 600_000, codeVerifier });
   // Prune expired states.
-  for (const [k, exp] of _oauthPendingStates) {
-    if (Date.now() > exp) _oauthPendingStates.delete(k);
+  for (const [k, v] of _oauthPendingStates) {
+    if (Date.now() > v.expiresAt) _oauthPendingStates.delete(k);
   }
 
   const params = new URLSearchParams({
@@ -1174,6 +1190,8 @@ app.get("/setup/oauth/railway/authorize", requireSetupAuth, (req, res) => {
     redirect_uri: railwayOAuthRedirectUri(req),
     scope: RAILWAY_OAUTH_SCOPES,
     state,
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
   });
 
   res.redirect(`${RAILWAY_OAUTH_AUTH_URL}?${params}`);
@@ -1190,12 +1208,13 @@ app.get("/setup/oauth/railway/callback", async (req, res) => {
     return res.status(400).type("text/plain").send("Missing authorization code");
   }
 
-  // Verify CSRF state from in-memory store.
-  const stateExp = _oauthPendingStates.get(state);
-  if (!stateExp || Date.now() > stateExp) {
+  // Verify CSRF state and retrieve PKCE verifier from in-memory store.
+  const pending = _oauthPendingStates.get(state);
+  if (!pending || Date.now() > pending.expiresAt) {
     _oauthPendingStates.delete(state);
     return res.status(403).type("text/plain").send("State mismatch or expired — possible CSRF. Try again.");
   }
+  const { codeVerifier } = pending;
   _oauthPendingStates.delete(state);
 
   if (!RAILWAY_OAUTH_CLIENT_ID || !RAILWAY_OAUTH_CLIENT_SECRET) {
@@ -1203,15 +1222,20 @@ app.get("/setup/oauth/railway/callback", async (req, res) => {
   }
 
   try {
+    // Use HTTP Basic Auth for client credentials as Railway docs specify.
+    const basicAuth = Buffer.from(`${RAILWAY_OAUTH_CLIENT_ID}:${RAILWAY_OAUTH_CLIENT_SECRET}`).toString("base64");
+
     const tokenRes = await fetch(RAILWAY_OAUTH_TOKEN_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": `Basic ${basicAuth}`,
+      },
       body: new URLSearchParams({
         grant_type: "authorization_code",
-        client_id: RAILWAY_OAUTH_CLIENT_ID,
-        client_secret: RAILWAY_OAUTH_CLIENT_SECRET,
         redirect_uri: railwayOAuthRedirectUri(req),
         code,
+        code_verifier: codeVerifier,
       }),
     });
 
