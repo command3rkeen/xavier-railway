@@ -170,12 +170,71 @@ async function waitForGatewayReady(opts = {}) {
   return false;
 }
 
+// Patch openclaw.json with secrets from env vars so tokens live in Railway's
+// encrypted secret store rather than on the filesystem.  Runs before every
+// gateway start.  Only writes if a value actually changed.
+function patchConfigFromEnv() {
+  const cfgPath = path.join(STATE_DIR, "openclaw.json");
+  if (!fs.existsSync(cfgPath)) return;
+
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+  } catch {
+    return; // corrupt config — let the gateway deal with it
+  }
+
+  let changed = false;
+
+  // Helper: set a nested key only if the env var is present and differs.
+  function inject(envName, getRef, setRef) {
+    const val = process.env[envName]?.trim();
+    if (!val) return;
+    const current = getRef(cfg);
+    if (current === val) return;
+    setRef(cfg, val);
+    changed = true;
+    console.log(`[config-patch] ${envName} → config (${val.slice(0, 6)}...)`);
+  }
+
+  // Channel tokens
+  inject("TELEGRAM_BOT_TOKEN",
+    (c) => c.channels?.telegram?.botToken,
+    (c, v) => { if (c.channels?.telegram) c.channels.telegram.botToken = v; },
+  );
+  inject("SLACK_BOT_TOKEN",
+    (c) => c.channels?.slack?.botToken,
+    (c, v) => { if (c.channels?.slack) c.channels.slack.botToken = v; },
+  );
+  inject("SLACK_APP_TOKEN",
+    (c) => c.channels?.slack?.appToken,
+    (c, v) => { if (c.channels?.slack) c.channels.slack.appToken = v; },
+  );
+
+  // Gateway token (already comes from OPENCLAW_GATEWAY_TOKEN env, but sync it)
+  inject("OPENCLAW_GATEWAY_TOKEN",
+    (c) => c.gateway?.auth?.token,
+    (c, v) => {
+      if (c.gateway?.auth) c.gateway.auth.token = v;
+      if (c.gateway?.remote) c.gateway.remote.token = v;
+    },
+  );
+
+  if (changed) {
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), { encoding: "utf8", mode: 0o600 });
+    console.log("[config-patch] openclaw.json updated from env vars");
+  }
+}
+
 async function startGateway() {
   if (gatewayProc) return;
   if (!isConfigured()) throw new Error("Gateway cannot start: not configured");
 
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+
+  // Inject secrets from env vars before starting.
+  patchConfigFromEnv();
 
   const args = [
     "gateway",
