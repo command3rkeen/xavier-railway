@@ -96,6 +96,12 @@ const GATEWAY_TARGET = `http://${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}
 const OPENCLAW_ENTRY = process.env.OPENCLAW_ENTRY?.trim() || "/openclaw/dist/entry.js";
 const OPENCLAW_NODE = process.env.OPENCLAW_NODE?.trim() || "node";
 
+// Tailscale (optional — only starts if TS_AUTHKEY is set)
+const TS_AUTHKEY = process.env.TS_AUTHKEY?.trim();
+const TS_HOSTNAME = process.env.TS_HOSTNAME?.trim() || "xavier";
+const TS_STATE_DIR = path.join("/data", "tailscale");
+const TS_SOCKET = path.join(TS_STATE_DIR, "tailscaled.sock");
+
 function clawArgs(args) {
   return [OPENCLAW_ENTRY, ...args];
 }
@@ -145,6 +151,71 @@ let lastDoctorAt = null;
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+// ──── Tailscale (private tailnet access to admin UI) ──────────────────────
+let tailscaleProc = null;
+
+async function startTailscale() {
+  if (!TS_AUTHKEY) return; // graceful skip — Xavier works exactly as before
+
+  console.log("[tailscale] starting (userspace networking)...");
+  fs.mkdirSync(TS_STATE_DIR, { recursive: true });
+
+  // Start tailscaled daemon in userspace mode (no /dev/net/tun needed on Railway)
+  tailscaleProc = childProcess.spawn("tailscaled", [
+    "--tun=userspace-networking",
+    `--statedir=${TS_STATE_DIR}`,
+    `--socket=${TS_SOCKET}`,
+  ], { stdio: "inherit" });
+
+  tailscaleProc.on("error", (err) => {
+    console.error(`[tailscale] spawn error: ${err}`);
+    tailscaleProc = null;
+  });
+  tailscaleProc.on("exit", (code, signal) => {
+    console.error(`[tailscale] exited code=${code} signal=${signal}`);
+    tailscaleProc = null;
+  });
+
+  // Wait for daemon socket to appear
+  for (let i = 0; i < 20; i++) {
+    if (fs.existsSync(TS_SOCKET)) break;
+    await sleep(500);
+  }
+
+  // Join the tailnet
+  const up = await runCmd("tailscale", [
+    "--socket", TS_SOCKET,
+    "up",
+    "--authkey", TS_AUTHKEY,
+    "--hostname", TS_HOSTNAME,
+  ]);
+  console.log(`[tailscale] up: exit=${up.code}`);
+  if (up.code !== 0) {
+    console.error(`[tailscale] failed to join tailnet: ${up.output}`);
+    return; // don't try to serve if we couldn't connect
+  }
+
+  // Expose the wrapper (port 8080) over tailnet HTTPS.
+  // Requests arrive from localhost, so isLoopbackRequest() returns true —
+  // /setup bypasses the SETUP_ENABLED kill switch (but still requires password).
+  const serve = await runCmd("tailscale", [
+    "--socket", TS_SOCKET,
+    "serve", "--bg",
+    `http://localhost:${PORT}`,
+  ]);
+  console.log(`[tailscale] serve: exit=${serve.code}`);
+
+  // Log the tailnet DNS name for debugging
+  const status = await runCmd("tailscale", ["--socket", TS_SOCKET, "status", "--json"]);
+  if (status.code === 0) {
+    try {
+      const info = JSON.parse(status.output);
+      console.log(`[tailscale] connected as ${info.Self?.DNSName || TS_HOSTNAME}`);
+    } catch { /* ignore parse errors */ }
+  }
+}
+// ──── End Tailscale ───────────────────────────────────────────────────────
 
 async function waitForGatewayReady(opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 20_000;
@@ -406,6 +477,11 @@ app.get("/healthz", async (_req, res) => {
       lastError: lastGatewayError,
       lastExit: lastGatewayExit,
       lastDoctorAt,
+    },
+    tailscale: {
+      enabled: Boolean(TS_AUTHKEY),
+      running: Boolean(tailscaleProc),
+      hostname: TS_HOSTNAME,
     },
   });
 });
@@ -927,6 +1003,12 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       node: OPENCLAW_NODE,
       version: v.output.trim(),
       channelsAddHelpIncludesTelegram: help.output.includes("telegram"),
+    },
+    tailscale: {
+      enabled: Boolean(TS_AUTHKEY),
+      running: Boolean(tailscaleProc),
+      hostname: TS_HOSTNAME,
+      stateDir: TS_STATE_DIR,
     },
   });
 });
@@ -1756,6 +1838,17 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
   } else {
     console.warn("[wrapper] /setup is ENABLED — disable when not administering (unset SETUP_ENABLED)");
   }
+  if (TS_AUTHKEY) {
+    console.log(`[wrapper] tailscale: ENABLED (hostname=${TS_HOSTNAME})`);
+  } else {
+    console.log("[wrapper] tailscale: DISABLED (set TS_AUTHKEY to enable)");
+  }
+
+  // Start Tailscale first (fire-and-forget — failure won't block the gateway).
+  // This makes /setup and the Control UI reachable via tailnet without SETUP_ENABLED.
+  startTailscale().catch((err) => {
+    console.error(`[wrapper] tailscale failed: ${String(err)}`);
+  });
 
   // Auto-start the gateway if already configured so polling channels (Telegram/Discord/etc.)
   // work even if nobody visits the web UI.
@@ -1786,6 +1879,11 @@ server.on("upgrade", async (req, socket, head) => {
 
 process.on("SIGTERM", () => {
   // Best-effort shutdown
+  try {
+    if (tailscaleProc) tailscaleProc.kill("SIGTERM");
+  } catch {
+    // ignore
+  }
   try {
     if (gatewayProc) gatewayProc.kill("SIGTERM");
   } catch {
