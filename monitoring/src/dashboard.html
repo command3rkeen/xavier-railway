@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Xavier Monitor</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: ui-monospace, 'Cascadia Code', 'Fira Code', Menlo, monospace;
+    background: #0f1117; color: #e0e0e0; padding: 20px; line-height: 1.5;
+  }
+  a { color: #60a5fa; }
+
+  .header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding-bottom: 16px; border-bottom: 1px solid #2a2d37; margin-bottom: 20px;
+  }
+  .header h1 { font-size: 18px; font-weight: 600; }
+  .status-badge {
+    font-size: 13px; font-weight: 600; padding: 4px 12px; border-radius: 4px;
+  }
+  .status-badge.online { background: #16352b; color: #22c55e; }
+  .status-badge.offline { background: #3b1414; color: #ef4444; }
+  .status-badge.unknown { background: #2a2d37; color: #888; }
+
+  .meta { font-size: 12px; color: #888; margin-top: 4px; }
+
+  .cards {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px; margin-bottom: 20px;
+  }
+  .card {
+    background: #1a1d27; border: 1px solid #2a2d37; border-radius: 8px; padding: 16px;
+  }
+  .card-label { font-size: 11px; text-transform: uppercase; color: #888; letter-spacing: 0.5px; }
+  .card-value { font-size: 28px; font-weight: 700; margin: 4px 0; }
+  .card-sub { font-size: 12px; color: #888; }
+  .card-value.green { color: #22c55e; }
+  .card-value.red { color: #ef4444; }
+  .card-value.yellow { color: #f59e0b; }
+
+  .section { margin-bottom: 20px; }
+  .section-title { font-size: 13px; font-weight: 600; color: #aaa; margin-bottom: 8px; }
+
+  .heatmap-container {
+    background: #1a1d27; border: 1px solid #2a2d37; border-radius: 8px;
+    padding: 12px; overflow-x: auto;
+  }
+  .heatmap {
+    display: flex; gap: 1px; min-width: min-content; height: 24px; align-items: stretch;
+  }
+  .heatmap-slot {
+    width: 3px; min-width: 3px; border-radius: 1px; transition: opacity 0.2s;
+  }
+  .heatmap-slot:hover { opacity: 0.7; }
+  .heatmap-slot.up { background: #22c55e; }
+  .heatmap-slot.degraded { background: #f59e0b; }
+  .heatmap-slot.down { background: #ef4444; }
+  .heatmap-slot.empty { background: #2a2d37; }
+
+  .sparkline-container {
+    background: #1a1d27; border: 1px solid #2a2d37; border-radius: 8px;
+    padding: 12px; overflow: hidden;
+  }
+  .sparkline-container svg { width: 100%; height: 60px; }
+
+  .events-table {
+    width: 100%; border-collapse: collapse; font-size: 12px;
+  }
+  .events-table th {
+    text-align: left; padding: 8px; border-bottom: 1px solid #2a2d37;
+    color: #888; font-weight: 500; text-transform: uppercase; font-size: 11px;
+  }
+  .events-table td {
+    padding: 6px 8px; border-bottom: 1px solid #1f222c;
+    max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .events-table tr:hover td { background: #1f222c; }
+  .severity-critical { color: #ef4444; }
+  .severity-warning { color: #f59e0b; }
+  .severity-info { color: #22c55e; }
+
+  .error-log {
+    background: #1a1d27; border: 1px solid #2a2d37; border-radius: 8px;
+    padding: 12px; font-size: 11px; max-height: 200px; overflow-y: auto;
+    white-space: pre-wrap; word-break: break-all; color: #ef4444;
+  }
+  .error-log.empty { color: #555; font-style: italic; }
+
+  .btn {
+    background: #2a2d37; color: #e0e0e0; border: 1px solid #3a3d47;
+    padding: 4px 12px; border-radius: 4px; font-size: 12px; cursor: pointer;
+    font-family: inherit;
+  }
+  .btn:hover { background: #3a3d47; }
+
+  .actions { display: flex; gap: 8px; align-items: center; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>Xavier Monitor</h1>
+    <div class="meta">
+      Last check: <span id="last-check">&mdash;</span> &middot;
+      SSE: <span id="sse-status">connecting</span>
+    </div>
+  </div>
+  <div class="actions">
+    <button class="btn" onclick="sendTestAlert()">Test Alert</button>
+    <span id="status-badge" class="status-badge unknown">UNKNOWN</span>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-label">Gateway</div>
+    <div class="card-value" id="gateway-status">&mdash;</div>
+    <div class="card-sub" id="gateway-sub"></div>
+  </div>
+  <div class="card">
+    <div class="card-label">Response Time</div>
+    <div class="card-value" id="latency-value">&mdash;</div>
+    <div class="card-sub" id="latency-sub"></div>
+  </div>
+  <div class="card">
+    <div class="card-label">Uptime (24h)</div>
+    <div class="card-value" id="uptime-value">&mdash;</div>
+    <div class="card-sub" id="uptime-sub"></div>
+  </div>
+  <div class="card">
+    <div class="card-label">Errors (1h)</div>
+    <div class="card-value" id="error-value">0</div>
+    <div class="card-sub" id="error-sub"></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Uptime &mdash; 7 Days</div>
+  <div class="heatmap-container"><div class="heatmap" id="heatmap"></div></div>
+</div>
+
+<div class="section">
+  <div class="section-title">Response Time &mdash; 24h</div>
+  <div class="sparkline-container"><svg id="sparkline" viewBox="0 0 800 60" preserveAspectRatio="none"></svg></div>
+</div>
+
+<div class="section">
+  <div class="section-title">Recent Alerts</div>
+  <div class="card" style="padding:0; overflow: auto; max-height: 300px;">
+    <table class="events-table">
+      <thead><tr><th>Time</th><th>Severity</th><th>Rule</th><th>Message</th></tr></thead>
+      <tbody id="alerts-body"><tr><td colspan="4" style="color:#555; text-align:center; padding:16px;">No alerts yet</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Recent Errors (from logs)</div>
+  <div class="error-log empty" id="error-log">No recent errors</div>
+</div>
+
+<script>
+  // All DOM rendering uses data from our own trusted API (SQLite queries, not user input).
+  // No untrusted content is rendered as HTML.
+
+  // --- State ---
+  var currentStats = null;
+  var currentLatest = null;
+
+  // --- SSE ---
+  function connectSSE() {
+    var es = new EventSource("/api/events");
+    var sseEl = document.getElementById("sse-status");
+
+    es.onopen = function() { sseEl.textContent = "connected"; sseEl.style.color = "#22c55e"; };
+    es.onerror = function() { sseEl.textContent = "reconnecting..."; sseEl.style.color = "#f59e0b"; };
+
+    es.addEventListener("health", function(e) {
+      var data = JSON.parse(e.data);
+      currentStats = data.stats;
+      currentLatest = data.latest;
+      updateDashboard();
+      if (data.alerts && data.alerts.length) refreshAlerts();
+    });
+
+    es.addEventListener("logs", function(e) {
+      var data = JSON.parse(e.data);
+      updateErrorLog(data.latest);
+      if (data.alerts && data.alerts.length) refreshAlerts();
+    });
+  }
+
+  // --- Initial load ---
+  function loadInitial() {
+    Promise.all([
+      fetch("/api/stats").then(function(r) { return r.json(); }),
+      fetch("/api/health?hours=24").then(function(r) { return r.json(); }),
+      fetch("/api/alerts?limit=20").then(function(r) { return r.json(); }),
+      fetch("/api/heatmap").then(function(r) { return r.json(); }),
+      fetch("/api/logs?hours=1").then(function(r) { return r.json(); }),
+    ]).then(function(results) {
+      currentStats = results[0];
+      var health = results[1];
+      var alerts = results[2];
+      var heatmap = results[3];
+      var logs = results[4];
+
+      if (health.length > 0) currentLatest = health[health.length - 1];
+      updateDashboard();
+      renderSparkline(health);
+      renderHeatmap(heatmap);
+      renderAlerts(alerts);
+      if (logs.length > 0) updateErrorLog(logs[0]);
+    }).catch(function(err) {
+      console.error("Failed to load initial data:", err);
+    });
+  }
+
+  // --- Update functions ---
+  function updateDashboard() {
+    var badge = document.getElementById("status-badge");
+    var gwStatus = document.getElementById("gateway-status");
+    var gwSub = document.getElementById("gateway-sub");
+    var latVal = document.getElementById("latency-value");
+    var latSub = document.getElementById("latency-sub");
+    var upVal = document.getElementById("uptime-value");
+    var upSub = document.getElementById("uptime-sub");
+    var errVal = document.getElementById("error-value");
+    var lastCheck = document.getElementById("last-check");
+
+    if (currentLatest) {
+      var up = currentLatest.up === 1 || currentLatest.up === true;
+      var reachable = currentLatest.gateway_reachable === 1 || currentLatest.gatewayReachable === true;
+      var isOnline = up && reachable;
+
+      badge.textContent = isOnline ? "ONLINE" : up ? "DEGRADED" : "OFFLINE";
+      badge.className = "status-badge " + (isOnline ? "online" : "offline");
+
+      gwStatus.textContent = isOnline ? "UP" : up ? "DEGRADED" : "DOWN";
+      gwStatus.className = "card-value " + (isOnline ? "green" : "red");
+      gwSub.textContent = currentLatest.gateway_last_error || currentLatest.gatewayLastError || "";
+
+      var ms = currentLatest.response_time_ms != null ? currentLatest.response_time_ms : currentLatest.responseTimeMs;
+      latVal.textContent = ms != null ? ms + "ms" : "\u2014";
+      latVal.className = "card-value " + (ms > 5000 ? "red" : ms > 2000 ? "yellow" : "green");
+
+      var ts = currentLatest.ts || new Date().toISOString();
+      lastCheck.textContent = timeAgo(ts);
+    }
+
+    if (currentStats) {
+      latSub.textContent = currentStats.latency
+        ? "p95: " + (currentStats.latency.p95 != null ? currentStats.latency.p95 : "\u2014") + "ms"
+        : "";
+
+      upVal.textContent = currentStats.uptime24h != null ? currentStats.uptime24h + "%" : "\u2014";
+      var pct = parseFloat(currentStats.uptime24h);
+      upVal.className = "card-value " + (pct >= 99 ? "green" : pct >= 95 ? "yellow" : "red");
+      upSub.textContent = currentStats.totalChecks24h + " checks";
+
+      var errs = currentStats.errorRate ? currentStats.errorRate.totalErrors : 0;
+      errVal.textContent = String(errs || 0);
+      errVal.className = "card-value " + (errs > 0 ? "yellow" : "green");
+    }
+  }
+
+  function renderSparkline(healthData) {
+    var svg = document.getElementById("sparkline");
+    if (!healthData.length) { clearChildren(svg); return; }
+
+    var times = [];
+    for (var i = 0; i < healthData.length; i++) {
+      var t = healthData[i].response_time_ms;
+      if (t != null) times.push(t);
+    }
+    if (!times.length) return;
+
+    var max = Math.max.apply(null, times);
+    if (max < 1) max = 1;
+    var w = 800, h = 60;
+    var step = w / Math.max(times.length - 1, 1);
+
+    var points = [];
+    for (var j = 0; j < times.length; j++) {
+      points.push((j * step).toFixed(1) + "," + (h - (times[j] / max) * (h - 4)).toFixed(1));
+    }
+    var pointStr = points.join(" ");
+
+    // Build SVG with DOM methods to avoid innerHTML
+    clearChildren(svg);
+    var ns = "http://www.w3.org/2000/svg";
+
+    var defs = document.createElementNS(ns, "defs");
+    var grad = document.createElementNS(ns, "linearGradient");
+    grad.setAttribute("id", "grad");
+    grad.setAttribute("x1", "0"); grad.setAttribute("y1", "0");
+    grad.setAttribute("x2", "0"); grad.setAttribute("y2", "1");
+    var stop1 = document.createElementNS(ns, "stop");
+    stop1.setAttribute("offset", "0%"); stop1.setAttribute("stop-color", "#60a5fa"); stop1.setAttribute("stop-opacity", "0.3");
+    var stop2 = document.createElementNS(ns, "stop");
+    stop2.setAttribute("offset", "100%"); stop2.setAttribute("stop-color", "#60a5fa"); stop2.setAttribute("stop-opacity", "0");
+    grad.appendChild(stop1); grad.appendChild(stop2); defs.appendChild(grad); svg.appendChild(defs);
+
+    var fill = document.createElementNS(ns, "polyline");
+    fill.setAttribute("points", "0," + h + " " + pointStr + " " + w + "," + h);
+    fill.setAttribute("fill", "url(#grad)"); fill.setAttribute("stroke", "none");
+    svg.appendChild(fill);
+
+    var line = document.createElementNS(ns, "polyline");
+    line.setAttribute("points", pointStr);
+    line.setAttribute("fill", "none"); line.setAttribute("stroke", "#60a5fa");
+    line.setAttribute("stroke-width", "1.5"); line.setAttribute("vector-effect", "non-scaling-stroke");
+    svg.appendChild(line);
+  }
+
+  function renderHeatmap(slots) {
+    var container = document.getElementById("heatmap");
+    clearChildren(container);
+
+    if (!slots.length) {
+      var msg = document.createElement("div");
+      msg.style.cssText = "color:#555; padding:4px;";
+      msg.textContent = "No data yet";
+      container.appendChild(msg);
+      return;
+    }
+
+    for (var i = 0; i < slots.length; i++) {
+      var s = slots[i];
+      var ratio = s.total > 0 ? s.healthy / s.total : -1;
+      var cls = ratio < 0 ? "empty" : ratio >= 0.9 ? "up" : ratio >= 0.5 ? "degraded" : "down";
+      var pct = ratio >= 0 ? (ratio * 100).toFixed(0) + "%" : "no data";
+
+      var el = document.createElement("div");
+      el.className = "heatmap-slot " + cls;
+      el.title = s.slot + "\n" + pct + " healthy";
+      container.appendChild(el);
+    }
+  }
+
+  function renderAlerts(alerts) {
+    var tbody = document.getElementById("alerts-body");
+    clearChildren(tbody);
+
+    if (!alerts.length) {
+      var tr = document.createElement("tr");
+      var td = document.createElement("td");
+      td.colSpan = 4;
+      td.style.cssText = "color:#555; text-align:center; padding:16px;";
+      td.textContent = "No alerts yet";
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+
+    for (var i = 0; i < alerts.length; i++) {
+      var a = alerts[i];
+      var row = document.createElement("tr");
+
+      var tdTime = document.createElement("td");
+      tdTime.textContent = formatTime(a.ts);
+
+      var tdSev = document.createElement("td");
+      tdSev.className = "severity-" + a.severity;
+      tdSev.textContent = a.severity.toUpperCase();
+
+      var tdRule = document.createElement("td");
+      tdRule.textContent = a.rule;
+
+      var tdMsg = document.createElement("td");
+      tdMsg.textContent = a.message.split("\n")[0];
+      tdMsg.title = a.message;
+
+      row.appendChild(tdTime);
+      row.appendChild(tdSev);
+      row.appendChild(tdRule);
+      row.appendChild(tdMsg);
+      tbody.appendChild(row);
+    }
+  }
+
+  function refreshAlerts() {
+    fetch("/api/alerts?limit=20").then(function(r) { return r.json(); }).then(renderAlerts);
+  }
+
+  function updateErrorLog(logProbe) {
+    var el = document.getElementById("error-log");
+    var snippet = logProbe ? (logProbe.raw_snippet || logProbe.rawSnippet) : null;
+    if (!snippet) {
+      el.textContent = "No recent errors";
+      el.className = "error-log empty";
+    } else {
+      el.textContent = snippet;
+      el.className = "error-log";
+    }
+  }
+
+  // --- Actions ---
+  function sendTestAlert() {
+    fetch("/api/test-alert", { method: "POST" })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        alert(data.ok ? "Test alert sent!" : "Failed: " + JSON.stringify(data));
+      })
+      .catch(function(err) {
+        alert("Error: " + err.message);
+      });
+  }
+
+  // --- Helpers ---
+  function clearChildren(el) {
+    while (el.firstChild) el.removeChild(el.firstChild);
+  }
+
+  function timeAgo(iso) {
+    var diff = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (diff < 60) return Math.floor(diff) + "s ago";
+    if (diff < 3600) return Math.floor(diff / 60) + "m ago";
+    if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
+    return Math.floor(diff / 86400) + "d ago";
+  }
+
+  function formatTime(iso) {
+    var d = new Date(iso);
+    return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+
+  // --- Auto-refresh sparkline + heatmap periodically ---
+  setInterval(function() {
+    Promise.all([
+      fetch("/api/health?hours=24").then(function(r) { return r.json(); }),
+      fetch("/api/heatmap").then(function(r) { return r.json(); }),
+    ]).then(function(results) {
+      renderSparkline(results[0]);
+      renderHeatmap(results[1]);
+    }).catch(function() {});
+  }, 60000);
+
+  // --- Boot ---
+  loadInitial();
+  connectSSE();
+</script>
+</body>
+</html>
