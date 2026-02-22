@@ -539,6 +539,22 @@ app.use(express.json({ limit: "1mb" }));
 // doesn't kill the container.  This endpoint is harmless (no secrets).
 app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
 
+// Quick HTTP probe to check if the gateway is listening.
+async function probeGateway() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
+  try {
+    const res = await fetch(`${GATEWAY_TARGET}/healthz`, {
+      signal: controller.signal,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Public health endpoint (no auth) so Railway can probe without /setup.
 // Keep this free of secrets.
 app.get("/healthz", async (_req, res) => {
