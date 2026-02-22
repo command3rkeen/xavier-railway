@@ -153,7 +153,8 @@ class GatewayClient extends EventEmitter {
 
     this._ws.onopen = () => {
       this._connected = true;
-      this._reconnectDelay = RECONNECT_BASE_MS;
+      // NOTE: reconnect delay is reset only after successful handshake (hello-ok),
+      // not here. This prevents reconnect storms when TCP opens but auth fails.
       console.log("[gateway] socket open, waiting for challenge...");
     };
 
@@ -179,6 +180,7 @@ class GatewayClient extends EventEmitter {
           clearTimeout(handshakeTimer);
           this._handshakeComplete = true;
           this._connectedAt = Date.now();
+          this._reconnectDelay = RECONNECT_BASE_MS;  // Reset backoff only after successful auth
           this._serverInfo = msg.payload.server || null;
           console.log(`[gateway] connected (protocol v${msg.payload.protocol}, server ${this._serverInfo?.version || "?"})`);
           this.emit("connected", msg.payload);
@@ -238,7 +240,7 @@ class GatewayClient extends EventEmitter {
       this._serverInfo = null;
 
       // Reject all pending calls
-      for (const [id, entry] of this._pending) {
+      for (const [, entry] of this._pending) {
         clearTimeout(entry.timer);
         entry.reject(new Error("Gateway connection closed"));
       }
@@ -311,7 +313,17 @@ class GatewayClient extends EventEmitter {
         token: GATEWAY_DEVICE_TOKEN,
         nonce: nonce || undefined,
       });
-      const signature = signPayload(GATEWAY_DEVICE_PRIVKEY, payload);
+
+      let signature;
+      try {
+        signature = signPayload(GATEWAY_DEVICE_PRIVKEY, payload);
+      } catch (err) {
+        // Bad private key (malformed base64url or invalid ED25519 bytes).
+        // Log and close — the reconnect backoff will prevent rapid retries.
+        console.error("[gateway] device signing failed (bad GATEWAY_DEVICE_PRIVKEY?):", err.message);
+        this._ws?.close();
+        return;
+      }
 
       connectParams.device = {
         id: GATEWAY_DEVICE_ID,
