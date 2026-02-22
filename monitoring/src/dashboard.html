@@ -3,46 +3,80 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Xavier Monitor</title>
+<title>Xavier Admin</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: ui-monospace, 'Cascadia Code', 'Fira Code', Menlo, monospace;
-    background: #0f1117; color: #e0e0e0; padding: 20px; line-height: 1.5;
+    background: #0f1117; color: #e0e0e0; line-height: 1.5;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
   }
   a { color: #60a5fa; }
+  button { font-family: inherit; }
 
-  .header {
+  /* --- Top bar --- */
+  .topbar {
     display: flex; justify-content: space-between; align-items: center;
-    padding-bottom: 16px; border-bottom: 1px solid #2a2d37; margin-bottom: 20px;
+    padding: 12px 20px; border-bottom: 1px solid #2a2d37; flex-shrink: 0;
+    background: #13151d;
   }
-  .header h1 { font-size: 18px; font-weight: 600; }
+  .topbar-left { display: flex; align-items: center; gap: 16px; }
+  .topbar h1 { font-size: 16px; font-weight: 600; white-space: nowrap; }
+  .topbar .meta { font-size: 11px; color: #888; }
+
+  .status-dots { display: flex; gap: 8px; align-items: center; }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+  }
+  .dot.green { background: #22c55e; }
+  .dot.red { background: #ef4444; }
+  .dot.gray { background: #555; }
+  .dot-label { font-size: 11px; color: #888; margin-right: 8px; }
+
   .status-badge {
-    font-size: 13px; font-weight: 600; padding: 4px 12px; border-radius: 4px;
+    font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 4px;
   }
   .status-badge.online { background: #16352b; color: #22c55e; }
   .status-badge.offline { background: #3b1414; color: #ef4444; }
   .status-badge.unknown { background: #2a2d37; color: #888; }
 
-  .meta { font-size: 12px; color: #888; margin-top: 4px; }
+  /* --- Tabs --- */
+  .tabs {
+    display: flex; gap: 0; border-bottom: 1px solid #2a2d37; flex-shrink: 0;
+    background: #13151d; padding: 0 20px;
+  }
+  .tab {
+    padding: 8px 16px; font-size: 13px; cursor: pointer; border: none;
+    background: none; color: #888; border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .tab:hover { color: #ccc; }
+  .tab.active { color: #60a5fa; border-bottom-color: #60a5fa; }
 
+  /* --- Tab content --- */
+  .tab-content { flex: 1; overflow-y: auto; padding: 20px; }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+
+  /* --- Cards --- */
   .cards {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 12px; margin-bottom: 20px;
   }
   .card {
-    background: #1a1d27; border: 1px solid #2a2d37; border-radius: 8px; padding: 16px;
+    background: #1a1d27; border: 1px solid #2a2d37; border-radius: 8px; padding: 14px;
   }
-  .card-label { font-size: 11px; text-transform: uppercase; color: #888; letter-spacing: 0.5px; }
-  .card-value { font-size: 28px; font-weight: 700; margin: 4px 0; }
-  .card-sub { font-size: 12px; color: #888; }
+  .card-label { font-size: 10px; text-transform: uppercase; color: #888; letter-spacing: 0.5px; }
+  .card-value { font-size: 26px; font-weight: 700; margin: 2px 0; }
+  .card-sub { font-size: 11px; color: #888; }
   .card-value.green { color: #22c55e; }
   .card-value.red { color: #ef4444; }
   .card-value.yellow { color: #f59e0b; }
 
   .section { margin-bottom: 20px; }
-  .section-title { font-size: 13px; font-weight: 600; color: #aaa; margin-bottom: 8px; }
+  .section-title { font-size: 12px; font-weight: 600; color: #aaa; margin-bottom: 8px; }
 
+  /* --- Heatmap --- */
   .heatmap-container {
     background: #1a1d27; border: 1px solid #2a2d37; border-radius: 8px;
     padding: 12px; overflow-x: auto;
@@ -59,28 +93,32 @@
   .heatmap-slot.down { background: #ef4444; }
   .heatmap-slot.empty { background: #2a2d37; }
 
+  /* --- Sparkline --- */
   .sparkline-container {
     background: #1a1d27; border: 1px solid #2a2d37; border-radius: 8px;
     padding: 12px; overflow: hidden;
   }
   .sparkline-container svg { width: 100%; height: 60px; }
 
-  .events-table {
+  /* --- Tables --- */
+  .data-table {
     width: 100%; border-collapse: collapse; font-size: 12px;
   }
-  .events-table th {
+  .data-table th {
     text-align: left; padding: 8px; border-bottom: 1px solid #2a2d37;
-    color: #888; font-weight: 500; text-transform: uppercase; font-size: 11px;
+    color: #888; font-weight: 500; text-transform: uppercase; font-size: 10px;
+    position: sticky; top: 0; background: #1a1d27; z-index: 1;
   }
-  .events-table td {
+  .data-table td {
     padding: 6px 8px; border-bottom: 1px solid #1f222c;
     max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .events-table tr:hover td { background: #1f222c; }
+  .data-table tr:hover td { background: #1f222c; cursor: pointer; }
   .severity-critical { color: #ef4444; }
   .severity-warning { color: #f59e0b; }
   .severity-info { color: #22c55e; }
 
+  /* --- Error log --- */
   .error-log {
     background: #1a1d27; border: 1px solid #2a2d37; border-radius: 8px;
     padding: 12px; font-size: 11px; max-height: 200px; overflow-y: auto;
@@ -88,187 +126,474 @@
   }
   .error-log.empty { color: #555; font-style: italic; }
 
+  /* --- Buttons --- */
   .btn {
     background: #2a2d37; color: #e0e0e0; border: 1px solid #3a3d47;
     padding: 4px 12px; border-radius: 4px; font-size: 12px; cursor: pointer;
-    font-family: inherit;
   }
   .btn:hover { background: #3a3d47; }
+  .btn-primary { background: #1d4ed8; border-color: #2563eb; }
+  .btn-primary:hover { background: #2563eb; }
+  .btn-success { background: #16352b; border-color: #22c55e; color: #22c55e; }
 
-  .actions { display: flex; gap: 8px; align-items: center; }
+  /* --- Search bar --- */
+  .search-bar {
+    display: flex; gap: 8px; margin-bottom: 16px; align-items: center;
+  }
+  .search-input {
+    flex: 1; background: #1a1d27; border: 1px solid #2a2d37; border-radius: 4px;
+    padding: 6px 12px; color: #e0e0e0; font-family: inherit; font-size: 13px;
+    outline: none;
+  }
+  .search-input:focus { border-color: #60a5fa; }
+  .search-input::placeholder { color: #555; }
+
+  /* --- Sessions --- */
+  .session-row { cursor: pointer; }
+  .session-row.selected td { background: #1a2744; }
+  .label-badge {
+    display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 3px;
+    font-weight: 500;
+  }
+  .label-telegram { background: #1a3555; color: #60a5fa; }
+  .label-cron { background: #2d2a1a; color: #f59e0b; }
+  .label-thread { background: #1a2d1a; color: #22c55e; }
+  .label-slack { background: #2d1a2a; color: #c084fc; }
+  .label-default { background: #2a2d37; color: #888; }
+
+  /* --- Chat viewer --- */
+  .chat-panel {
+    background: #1a1d27; border: 1px solid #2a2d37; border-radius: 8px;
+    padding: 16px; margin-top: 12px; max-height: 60vh; overflow-y: auto;
+    display: none;
+  }
+  .chat-panel.open { display: block; }
+  .chat-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #2a2d37;
+  }
+  .chat-header h3 { font-size: 14px; font-weight: 600; }
+  .chat-msg {
+    margin-bottom: 12px; padding: 8px 12px; border-radius: 6px;
+    font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+    max-width: 85%;
+  }
+  .chat-msg.user {
+    background: #1d3a5c; margin-right: auto;
+  }
+  .chat-msg.assistant {
+    background: #1a2d1a; margin-left: auto;
+  }
+  .chat-msg.system {
+    background: #2a2a1a; margin: 0 auto; text-align: center; font-style: italic;
+    color: #888; max-width: 100%;
+  }
+  .chat-msg-role {
+    font-size: 10px; text-transform: uppercase; color: #888; margin-bottom: 2px;
+    font-weight: 600;
+  }
+  .chat-msg-content { color: #e0e0e0; }
+  .chat-msg-content code {
+    background: #0f1117; padding: 1px 4px; border-radius: 3px; font-size: 11px;
+  }
+  .chat-msg-content pre {
+    background: #0f1117; padding: 8px; border-radius: 4px; margin: 4px 0;
+    overflow-x: auto; font-size: 11px;
+  }
+  .tool-call {
+    background: #1a1a2d; border: 1px solid #2a2d47; border-radius: 4px;
+    padding: 6px 10px; margin: 4px 0; font-size: 11px; cursor: pointer;
+    color: #8b8bf5;
+  }
+  .tool-call:hover { background: #22224a; }
+  .tool-call-body {
+    display: none; margin-top: 6px; padding-top: 6px;
+    border-top: 1px solid #2a2d47; color: #bbb; white-space: pre-wrap;
+    max-height: 200px; overflow-y: auto;
+  }
+  .tool-call.expanded .tool-call-body { display: block; }
+
+  /* --- File editor --- */
+  .file-list {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 8px; margin-bottom: 16px;
+  }
+  .file-card {
+    background: #1a1d27; border: 1px solid #2a2d37; border-radius: 6px;
+    padding: 10px 14px; cursor: pointer; transition: border-color 0.15s;
+  }
+  .file-card:hover { border-color: #60a5fa; }
+  .file-card.selected { border-color: #60a5fa; background: #1a2744; }
+  .file-card-name { font-size: 13px; font-weight: 600; }
+  .file-card-meta { font-size: 10px; color: #888; margin-top: 2px; }
+
+  .editor-container {
+    background: #1a1d27; border: 1px solid #2a2d37; border-radius: 8px;
+    display: none;
+  }
+  .editor-container.open { display: block; }
+  .editor-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 14px; border-bottom: 1px solid #2a2d37;
+  }
+  .editor-header h3 { font-size: 14px; font-weight: 600; }
+  .editor-actions { display: flex; gap: 8px; align-items: center; }
+  .editor-status { font-size: 11px; color: #888; }
+  .editor-textarea {
+    width: 100%; min-height: 50vh; background: #0f1117; color: #e0e0e0;
+    border: none; padding: 14px; font-family: inherit; font-size: 12px;
+    line-height: 1.6; resize: vertical; outline: none;
+  }
+
+  /* --- Memory --- */
+  .memory-files { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .memory-file-btn {
+    background: #1a1d27; border: 1px solid #2a2d37; border-radius: 4px;
+    padding: 4px 12px; color: #e0e0e0; cursor: pointer; font-size: 12px;
+    font-family: inherit;
+  }
+  .memory-file-btn:hover { border-color: #60a5fa; }
+  .memory-file-btn.selected { border-color: #60a5fa; background: #1a2744; }
+
+  .memory-viewer {
+    background: #1a1d27; border: 1px solid #2a2d37; border-radius: 8px;
+    padding: 16px; white-space: pre-wrap; font-size: 12px; line-height: 1.7;
+    max-height: 65vh; overflow-y: auto;
+  }
+
+  .empty-state {
+    text-align: center; padding: 40px; color: #555; font-size: 13px;
+  }
+
+  /* --- Loading --- */
+  .spinner {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid #2a2d37; border-top-color: #60a5fa;
+    border-radius: 50%; animation: spin 0.6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
 
-<div class="header">
-  <div>
-    <h1>Xavier Monitor</h1>
-    <div class="meta">
-      Last check: <span id="last-check">&mdash;</span> &middot;
-      SSE: <span id="sse-status">connecting</span>
+<!-- Top bar -->
+<div class="topbar">
+  <div class="topbar-left">
+    <h1>Xavier Admin</h1>
+    <div class="status-dots">
+      <span class="dot-label">Xavier</span>
+      <span class="dot gray" id="xavier-dot"></span>
+      <span class="dot-label" style="margin-left:4px">Gateway</span>
+      <span class="dot gray" id="gateway-dot"></span>
+      <span class="dot-label" style="margin-left:4px">SSE</span>
+      <span class="dot gray" id="sse-dot"></span>
     </div>
   </div>
-  <div class="actions">
-    <button class="btn" onclick="sendTestAlert()">Test Alert</button>
+  <div style="display:flex; align-items:center; gap:12px;">
+    <span class="meta" id="last-check"></span>
     <span id="status-badge" class="status-badge unknown">UNKNOWN</span>
   </div>
 </div>
 
-<div class="cards">
-  <div class="card">
-    <div class="card-label">Gateway</div>
-    <div class="card-value" id="gateway-status">&mdash;</div>
-    <div class="card-sub" id="gateway-sub"></div>
-  </div>
-  <div class="card">
-    <div class="card-label">Response Time</div>
-    <div class="card-value" id="latency-value">&mdash;</div>
-    <div class="card-sub" id="latency-sub"></div>
-  </div>
-  <div class="card">
-    <div class="card-label">Uptime (24h)</div>
-    <div class="card-value" id="uptime-value">&mdash;</div>
-    <div class="card-sub" id="uptime-sub"></div>
-  </div>
-  <div class="card">
-    <div class="card-label">Errors (1h)</div>
-    <div class="card-value" id="error-value">0</div>
-    <div class="card-sub" id="error-sub"></div>
-  </div>
+<!-- Tab bar -->
+<div class="tabs">
+  <button class="tab active" data-tab="monitor">Monitor</button>
+  <button class="tab" data-tab="sessions">Sessions</button>
+  <button class="tab" data-tab="memory">Memory</button>
+  <button class="tab" data-tab="files">Files</button>
 </div>
 
-<div class="section">
-  <div class="section-title">Uptime &mdash; 7 Days</div>
-  <div class="heatmap-container"><div class="heatmap" id="heatmap"></div></div>
-</div>
+<!-- Tab content area -->
+<div class="tab-content">
 
-<div class="section">
-  <div class="section-title">Response Time &mdash; 24h</div>
-  <div class="sparkline-container"><svg id="sparkline" viewBox="0 0 800 60" preserveAspectRatio="none"></svg></div>
-</div>
+  <!-- ==================== MONITOR TAB ==================== -->
+  <div class="tab-pane active" id="pane-monitor">
+    <div class="cards">
+      <div class="card">
+        <div class="card-label">Gateway</div>
+        <div class="card-value" id="gateway-status">&mdash;</div>
+        <div class="card-sub" id="gateway-sub"></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Response Time</div>
+        <div class="card-value" id="latency-value">&mdash;</div>
+        <div class="card-sub" id="latency-sub"></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Uptime (24h)</div>
+        <div class="card-value" id="uptime-value">&mdash;</div>
+        <div class="card-sub" id="uptime-sub"></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Errors (1h)</div>
+        <div class="card-value" id="error-value">0</div>
+        <div class="card-sub" id="error-sub"></div>
+      </div>
+    </div>
 
-<div class="section">
-  <div class="section-title">Recent Alerts</div>
-  <div class="card" style="padding:0; overflow: auto; max-height: 300px;">
-    <table class="events-table">
-      <thead><tr><th>Time</th><th>Severity</th><th>Rule</th><th>Message</th></tr></thead>
-      <tbody id="alerts-body"><tr><td colspan="4" style="color:#555; text-align:center; padding:16px;">No alerts yet</td></tr></tbody>
-    </table>
+    <div class="section">
+      <div class="section-title">Uptime &mdash; 7 Days</div>
+      <div class="heatmap-container"><div class="heatmap" id="heatmap"></div></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Response Time &mdash; 24h</div>
+      <div class="sparkline-container"><svg id="sparkline" viewBox="0 0 800 60" preserveAspectRatio="none"></svg></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Recent Alerts</span>
+        <button class="btn" onclick="sendTestAlert()">Test Alert</button>
+      </div>
+      <div class="card" style="padding:0; overflow:auto; max-height:250px;">
+        <table class="data-table">
+          <thead><tr><th>Time</th><th>Severity</th><th>Rule</th><th>Message</th></tr></thead>
+          <tbody id="alerts-body"><tr><td colspan="4" class="empty-state">No alerts yet</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Recent Errors (from logs)</div>
+      <div class="error-log empty" id="error-log">No recent errors</div>
+    </div>
   </div>
-</div>
 
-<div class="section">
-  <div class="section-title">Recent Errors (from logs)</div>
-  <div class="error-log empty" id="error-log">No recent errors</div>
-</div>
+  <!-- ==================== SESSIONS TAB ==================== -->
+  <div class="tab-pane" id="pane-sessions">
+    <div class="search-bar">
+      <input class="search-input" id="session-search" type="text" placeholder="Search conversations..." />
+      <select class="search-input" id="session-label-filter" style="flex:none; width:140px;">
+        <option value="">All types</option>
+        <option value="telegram">Telegram</option>
+        <option value="cron">Cron</option>
+        <option value="thread">Thread</option>
+        <option value="slack">Slack</option>
+      </select>
+      <button class="btn" onclick="loadSessions()">Search</button>
+    </div>
+
+    <div class="card" style="padding:0; overflow:auto; max-height:40vh;">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th>Type</th>
+            <th>Model</th>
+            <th>Last Active</th>
+            <th style="text-align:right">Tokens</th>
+          </tr>
+        </thead>
+        <tbody id="sessions-body">
+          <tr><td colspan="5" class="empty-state"><span class="spinner"></span> Loading sessions...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="chat-panel" id="chat-panel">
+      <div class="chat-header">
+        <h3 id="chat-title">Conversation</h3>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span id="chat-msg-count" class="meta"></span>
+          <button class="btn" onclick="closeChatPanel()">Close</button>
+        </div>
+      </div>
+      <div id="chat-messages"></div>
+      <div style="text-align:center; margin-top:8px;">
+        <button class="btn" id="chat-load-more" style="display:none;" onclick="loadMoreMessages()">Load more messages</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== MEMORY TAB ==================== -->
+  <div class="tab-pane" id="pane-memory">
+    <div class="search-bar">
+      <input class="search-input" id="memory-search" type="text" placeholder="Semantic search across Xavier's memory..." />
+      <button class="btn" onclick="searchMemory()">Search</button>
+    </div>
+
+    <div id="memory-search-results" style="display:none; margin-bottom:20px;">
+      <div class="section-title">Search Results</div>
+      <div class="memory-viewer" id="memory-results-content"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Memory Files</div>
+      <div class="memory-files" id="memory-file-list">
+        <span class="meta"><span class="spinner"></span> Loading...</span>
+      </div>
+    </div>
+
+    <div class="memory-viewer" id="memory-content" style="display:none;"></div>
+  </div>
+
+  <!-- ==================== FILES TAB ==================== -->
+  <div class="tab-pane" id="pane-files">
+    <div class="section">
+      <div class="section-title">Workspace Files</div>
+      <div class="file-list" id="file-list">
+        <span class="meta"><span class="spinner"></span> Loading...</span>
+      </div>
+    </div>
+
+    <div class="editor-container" id="editor-container">
+      <div class="editor-header">
+        <h3 id="editor-filename">—</h3>
+        <div class="editor-actions">
+          <span class="editor-status" id="editor-status"></span>
+          <button class="btn" onclick="reloadFile()">Reload</button>
+          <button class="btn btn-primary" id="save-btn" onclick="saveFile()">Save</button>
+        </div>
+      </div>
+      <textarea class="editor-textarea" id="editor-textarea" spellcheck="false"></textarea>
+    </div>
+  </div>
+
+</div> <!-- end tab-content -->
 
 <script>
-  // All DOM rendering uses data from our own trusted API (SQLite queries, not user input).
-  // No untrusted content is rendered as HTML.
+  // --- Tab switching ---
+  var tabs = document.querySelectorAll('.tab');
+  var panes = document.querySelectorAll('.tab-pane');
+  var activeTab = 'monitor';
+  var tabLoaded = { monitor: false, sessions: false, memory: false, files: false };
 
-  // --- State ---
+  for (var i = 0; i < tabs.length; i++) {
+    tabs[i].addEventListener('click', function() {
+      var t = this.getAttribute('data-tab');
+      activeTab = t;
+      for (var j = 0; j < tabs.length; j++) {
+        tabs[j].classList.toggle('active', tabs[j].getAttribute('data-tab') === t);
+      }
+      for (var k = 0; k < panes.length; k++) {
+        panes[k].classList.toggle('active', panes[k].id === 'pane-' + t);
+      }
+      // Lazy-load tab data on first visit
+      if (!tabLoaded[t]) {
+        tabLoaded[t] = true;
+        if (t === 'sessions') loadSessions();
+        if (t === 'memory') loadMemoryFiles();
+        if (t === 'files') loadFiles();
+      }
+    });
+  }
+
+  // ========================================
+  // MONITOR TAB (existing functionality)
+  // ========================================
   var currentStats = null;
   var currentLatest = null;
 
-  // --- SSE ---
   function connectSSE() {
-    var es = new EventSource("/api/events");
-    var sseEl = document.getElementById("sse-status");
+    var es = new EventSource('/api/events');
+    var dot = document.getElementById('sse-dot');
 
-    es.onopen = function() { sseEl.textContent = "connected"; sseEl.style.color = "#22c55e"; };
-    es.onerror = function() { sseEl.textContent = "reconnecting..."; sseEl.style.color = "#f59e0b"; };
-
-    es.addEventListener("health", function(e) {
+    es.onopen = function() {
+      dot.className = 'dot green';
+    };
+    es.onerror = function() {
+      dot.className = 'dot red';
+    };
+    es.addEventListener('health', function(e) {
       var data = JSON.parse(e.data);
       currentStats = data.stats;
       currentLatest = data.latest;
-      updateDashboard();
+      updateMonitorDashboard();
       if (data.alerts && data.alerts.length) refreshAlerts();
     });
-
-    es.addEventListener("logs", function(e) {
+    es.addEventListener('logs', function(e) {
       var data = JSON.parse(e.data);
       updateErrorLog(data.latest);
       if (data.alerts && data.alerts.length) refreshAlerts();
     });
   }
 
-  // --- Initial load ---
-  function loadInitial() {
+  function loadMonitorData() {
     Promise.all([
-      fetch("/api/stats").then(function(r) { return r.json(); }),
-      fetch("/api/health?hours=24").then(function(r) { return r.json(); }),
-      fetch("/api/alerts?limit=20").then(function(r) { return r.json(); }),
-      fetch("/api/heatmap").then(function(r) { return r.json(); }),
-      fetch("/api/logs?hours=1").then(function(r) { return r.json(); }),
+      fetch('/api/stats').then(function(r) { return r.json(); }),
+      fetch('/api/health?hours=24').then(function(r) { return r.json(); }),
+      fetch('/api/alerts?limit=20').then(function(r) { return r.json(); }),
+      fetch('/api/heatmap').then(function(r) { return r.json(); }),
+      fetch('/api/logs?hours=1').then(function(r) { return r.json(); }),
+      fetch('/api/gateway-status').then(function(r) { return r.json(); }),
     ]).then(function(results) {
       currentStats = results[0];
       var health = results[1];
       var alerts = results[2];
       var heatmap = results[3];
       var logs = results[4];
+      var gwStatus = results[5];
 
       if (health.length > 0) currentLatest = health[health.length - 1];
-      updateDashboard();
+      updateMonitorDashboard();
       renderSparkline(health);
       renderHeatmap(heatmap);
       renderAlerts(alerts);
       if (logs.length > 0) updateErrorLog(logs[0]);
+      updateGatewayDot(gwStatus);
     }).catch(function(err) {
-      console.error("Failed to load initial data:", err);
+      console.error('Failed to load monitor data:', err);
     });
   }
 
-  // --- Update functions ---
-  function updateDashboard() {
-    var badge = document.getElementById("status-badge");
-    var gwStatus = document.getElementById("gateway-status");
-    var gwSub = document.getElementById("gateway-sub");
-    var latVal = document.getElementById("latency-value");
-    var latSub = document.getElementById("latency-sub");
-    var upVal = document.getElementById("uptime-value");
-    var upSub = document.getElementById("uptime-sub");
-    var errVal = document.getElementById("error-value");
-    var lastCheck = document.getElementById("last-check");
+  function updateGatewayDot(status) {
+    var dot = document.getElementById('gateway-dot');
+    dot.className = 'dot ' + (status.connected ? 'green' : 'red');
+  }
+
+  function updateMonitorDashboard() {
+    var badge = document.getElementById('status-badge');
+    var xDot = document.getElementById('xavier-dot');
+    var gwStatus = document.getElementById('gateway-status');
+    var gwSub = document.getElementById('gateway-sub');
+    var latVal = document.getElementById('latency-value');
+    var latSub = document.getElementById('latency-sub');
+    var upVal = document.getElementById('uptime-value');
+    var upSub = document.getElementById('uptime-sub');
+    var errVal = document.getElementById('error-value');
+    var lastCheck = document.getElementById('last-check');
 
     if (currentLatest) {
       var up = currentLatest.up === 1 || currentLatest.up === true;
       var reachable = currentLatest.gateway_reachable === 1 || currentLatest.gatewayReachable === true;
       var isOnline = up && reachable;
 
-      badge.textContent = isOnline ? "ONLINE" : up ? "DEGRADED" : "OFFLINE";
-      badge.className = "status-badge " + (isOnline ? "online" : "offline");
+      badge.textContent = isOnline ? 'ONLINE' : up ? 'DEGRADED' : 'OFFLINE';
+      badge.className = 'status-badge ' + (isOnline ? 'online' : 'offline');
 
-      gwStatus.textContent = isOnline ? "UP" : up ? "DEGRADED" : "DOWN";
-      gwStatus.className = "card-value " + (isOnline ? "green" : "red");
-      gwSub.textContent = currentLatest.gateway_last_error || currentLatest.gatewayLastError || "";
+      xDot.className = 'dot ' + (isOnline ? 'green' : 'red');
+
+      gwStatus.textContent = isOnline ? 'UP' : up ? 'DEGRADED' : 'DOWN';
+      gwStatus.className = 'card-value ' + (isOnline ? 'green' : 'red');
+      gwSub.textContent = currentLatest.gateway_last_error || currentLatest.gatewayLastError || '';
 
       var ms = currentLatest.response_time_ms != null ? currentLatest.response_time_ms : currentLatest.responseTimeMs;
-      latVal.textContent = ms != null ? ms + "ms" : "\u2014";
-      latVal.className = "card-value " + (ms > 5000 ? "red" : ms > 2000 ? "yellow" : "green");
+      latVal.textContent = ms != null ? ms + 'ms' : '\u2014';
+      latVal.className = 'card-value ' + (ms > 5000 ? 'red' : ms > 2000 ? 'yellow' : 'green');
 
       var ts = currentLatest.ts || new Date().toISOString();
-      lastCheck.textContent = timeAgo(ts);
+      lastCheck.textContent = 'Last: ' + timeAgo(ts);
     }
 
     if (currentStats) {
       latSub.textContent = currentStats.latency
-        ? "p95: " + (currentStats.latency.p95 != null ? currentStats.latency.p95 : "\u2014") + "ms"
-        : "";
+        ? 'p95: ' + (currentStats.latency.p95 != null ? currentStats.latency.p95 : '\u2014') + 'ms'
+        : '';
 
-      upVal.textContent = currentStats.uptime24h != null ? currentStats.uptime24h + "%" : "\u2014";
+      upVal.textContent = currentStats.uptime24h != null ? currentStats.uptime24h + '%' : '\u2014';
       var pct = parseFloat(currentStats.uptime24h);
-      upVal.className = "card-value " + (pct >= 99 ? "green" : pct >= 95 ? "yellow" : "red");
-      upSub.textContent = currentStats.totalChecks24h + " checks";
+      upVal.className = 'card-value ' + (pct >= 99 ? 'green' : pct >= 95 ? 'yellow' : 'red');
+      upSub.textContent = currentStats.totalChecks24h + ' checks';
 
       var errs = currentStats.errorRate ? currentStats.errorRate.totalErrors : 0;
       errVal.textContent = String(errs || 0);
-      errVal.className = "card-value " + (errs > 0 ? "yellow" : "green");
+      errVal.className = 'card-value ' + (errs > 0 ? 'yellow' : 'green');
     }
   }
 
   function renderSparkline(healthData) {
-    var svg = document.getElementById("sparkline");
+    var svg = document.getElementById('sparkline');
     if (!healthData.length) { clearChildren(svg); return; }
 
     var times = [];
@@ -285,162 +610,702 @@
 
     var points = [];
     for (var j = 0; j < times.length; j++) {
-      points.push((j * step).toFixed(1) + "," + (h - (times[j] / max) * (h - 4)).toFixed(1));
+      points.push((j * step).toFixed(1) + ',' + (h - (times[j] / max) * (h - 4)).toFixed(1));
     }
-    var pointStr = points.join(" ");
+    var pointStr = points.join(' ');
 
-    // Build SVG with DOM methods to avoid innerHTML
     clearChildren(svg);
-    var ns = "http://www.w3.org/2000/svg";
-
-    var defs = document.createElementNS(ns, "defs");
-    var grad = document.createElementNS(ns, "linearGradient");
-    grad.setAttribute("id", "grad");
-    grad.setAttribute("x1", "0"); grad.setAttribute("y1", "0");
-    grad.setAttribute("x2", "0"); grad.setAttribute("y2", "1");
-    var stop1 = document.createElementNS(ns, "stop");
-    stop1.setAttribute("offset", "0%"); stop1.setAttribute("stop-color", "#60a5fa"); stop1.setAttribute("stop-opacity", "0.3");
-    var stop2 = document.createElementNS(ns, "stop");
-    stop2.setAttribute("offset", "100%"); stop2.setAttribute("stop-color", "#60a5fa"); stop2.setAttribute("stop-opacity", "0");
+    var ns = 'http://www.w3.org/2000/svg';
+    var defs = document.createElementNS(ns, 'defs');
+    var grad = document.createElementNS(ns, 'linearGradient');
+    grad.setAttribute('id', 'grad');
+    grad.setAttribute('x1', '0'); grad.setAttribute('y1', '0');
+    grad.setAttribute('x2', '0'); grad.setAttribute('y2', '1');
+    var stop1 = document.createElementNS(ns, 'stop');
+    stop1.setAttribute('offset', '0%'); stop1.setAttribute('stop-color', '#60a5fa'); stop1.setAttribute('stop-opacity', '0.3');
+    var stop2 = document.createElementNS(ns, 'stop');
+    stop2.setAttribute('offset', '100%'); stop2.setAttribute('stop-color', '#60a5fa'); stop2.setAttribute('stop-opacity', '0');
     grad.appendChild(stop1); grad.appendChild(stop2); defs.appendChild(grad); svg.appendChild(defs);
 
-    var fill = document.createElementNS(ns, "polyline");
-    fill.setAttribute("points", "0," + h + " " + pointStr + " " + w + "," + h);
-    fill.setAttribute("fill", "url(#grad)"); fill.setAttribute("stroke", "none");
+    var fill = document.createElementNS(ns, 'polyline');
+    fill.setAttribute('points', '0,' + h + ' ' + pointStr + ' ' + w + ',' + h);
+    fill.setAttribute('fill', 'url(#grad)'); fill.setAttribute('stroke', 'none');
     svg.appendChild(fill);
 
-    var line = document.createElementNS(ns, "polyline");
-    line.setAttribute("points", pointStr);
-    line.setAttribute("fill", "none"); line.setAttribute("stroke", "#60a5fa");
-    line.setAttribute("stroke-width", "1.5"); line.setAttribute("vector-effect", "non-scaling-stroke");
+    var line = document.createElementNS(ns, 'polyline');
+    line.setAttribute('points', pointStr);
+    line.setAttribute('fill', 'none'); line.setAttribute('stroke', '#60a5fa');
+    line.setAttribute('stroke-width', '1.5'); line.setAttribute('vector-effect', 'non-scaling-stroke');
     svg.appendChild(line);
   }
 
   function renderHeatmap(slots) {
-    var container = document.getElementById("heatmap");
+    var container = document.getElementById('heatmap');
     clearChildren(container);
-
     if (!slots.length) {
-      var msg = document.createElement("div");
-      msg.style.cssText = "color:#555; padding:4px;";
-      msg.textContent = "No data yet";
+      var msg = document.createElement('div');
+      msg.style.cssText = 'color:#555; padding:4px;';
+      msg.textContent = 'No data yet';
       container.appendChild(msg);
       return;
     }
-
     for (var i = 0; i < slots.length; i++) {
       var s = slots[i];
       var ratio = s.total > 0 ? s.healthy / s.total : -1;
-      var cls = ratio < 0 ? "empty" : ratio >= 0.9 ? "up" : ratio >= 0.5 ? "degraded" : "down";
-      var pct = ratio >= 0 ? (ratio * 100).toFixed(0) + "%" : "no data";
-
-      var el = document.createElement("div");
-      el.className = "heatmap-slot " + cls;
-      el.title = s.slot + "\n" + pct + " healthy";
+      var cls = ratio < 0 ? 'empty' : ratio >= 0.9 ? 'up' : ratio >= 0.5 ? 'degraded' : 'down';
+      var pct = ratio >= 0 ? (ratio * 100).toFixed(0) + '%' : 'no data';
+      var el = document.createElement('div');
+      el.className = 'heatmap-slot ' + cls;
+      el.title = s.slot + '\n' + pct + ' healthy';
       container.appendChild(el);
     }
   }
 
   function renderAlerts(alerts) {
-    var tbody = document.getElementById("alerts-body");
+    var tbody = document.getElementById('alerts-body');
     clearChildren(tbody);
-
     if (!alerts.length) {
-      var tr = document.createElement("tr");
-      var td = document.createElement("td");
-      td.colSpan = 4;
-      td.style.cssText = "color:#555; text-align:center; padding:16px;";
-      td.textContent = "No alerts yet";
-      tr.appendChild(td);
-      tbody.appendChild(tr);
+      var tr = document.createElement('tr');
+      var td = document.createElement('td');
+      td.colSpan = 4; td.className = 'empty-state'; td.textContent = 'No alerts yet';
+      tr.appendChild(td); tbody.appendChild(tr);
       return;
     }
-
     for (var i = 0; i < alerts.length; i++) {
       var a = alerts[i];
-      var row = document.createElement("tr");
-
-      var tdTime = document.createElement("td");
-      tdTime.textContent = formatTime(a.ts);
-
-      var tdSev = document.createElement("td");
-      tdSev.className = "severity-" + a.severity;
-      tdSev.textContent = a.severity.toUpperCase();
-
-      var tdRule = document.createElement("td");
-      tdRule.textContent = a.rule;
-
-      var tdMsg = document.createElement("td");
-      tdMsg.textContent = a.message.split("\n")[0];
-      tdMsg.title = a.message;
-
-      row.appendChild(tdTime);
-      row.appendChild(tdSev);
-      row.appendChild(tdRule);
-      row.appendChild(tdMsg);
+      var row = document.createElement('tr');
+      addCell(row, formatTime(a.ts));
+      var sevCell = addCell(row, a.severity.toUpperCase());
+      sevCell.className = 'severity-' + a.severity;
+      addCell(row, a.rule);
+      var msgCell = addCell(row, a.message.split('\n')[0]);
+      msgCell.title = a.message;
       tbody.appendChild(row);
     }
   }
 
   function refreshAlerts() {
-    fetch("/api/alerts?limit=20").then(function(r) { return r.json(); }).then(renderAlerts);
+    fetch('/api/alerts?limit=20').then(function(r) { return r.json(); }).then(renderAlerts);
   }
 
   function updateErrorLog(logProbe) {
-    var el = document.getElementById("error-log");
+    var el = document.getElementById('error-log');
     var snippet = logProbe ? (logProbe.raw_snippet || logProbe.rawSnippet) : null;
     if (!snippet) {
-      el.textContent = "No recent errors";
-      el.className = "error-log empty";
+      el.textContent = 'No recent errors'; el.className = 'error-log empty';
     } else {
-      el.textContent = snippet;
-      el.className = "error-log";
+      el.textContent = snippet; el.className = 'error-log';
     }
   }
 
-  // --- Actions ---
   function sendTestAlert() {
-    fetch("/api/test-alert", { method: "POST" })
+    fetch('/api/test-alert', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(data) { window.alert(data.ok ? 'Test alert sent!' : 'Failed: ' + JSON.stringify(data)); })
+      .catch(function(err) { window.alert('Error: ' + err.message); });
+  }
+
+  // ========================================
+  // SESSIONS TAB
+  // ========================================
+  var sessionsData = [];
+  var selectedSessionKey = null;
+  var chatMessages = [];
+  var chatSessionKey = null;
+
+  function loadSessions() {
+    var search = document.getElementById('session-search').value;
+    var label = document.getElementById('session-label-filter').value;
+    var url = '/api/sessions?limit=100';
+    if (search) url += '&search=' + encodeURIComponent(search);
+    if (label) url += '&label=' + encodeURIComponent(label);
+
+    var tbody = document.getElementById('sessions-body');
+    clearChildren(tbody);
+    var loadTr = document.createElement('tr');
+    var loadTd = document.createElement('td');
+    loadTd.colSpan = 5; loadTd.className = 'empty-state';
+    loadTd.innerHTML = '<span class="spinner"></span> Loading...';
+    loadTr.appendChild(loadTd); tbody.appendChild(loadTr);
+
+    fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+      if (data.error) {
+        clearChildren(tbody);
+        var errTr = document.createElement('tr');
+        var errTd = document.createElement('td');
+        errTd.colSpan = 5; errTd.className = 'empty-state';
+        errTd.textContent = 'Gateway error: ' + data.error;
+        errTr.appendChild(errTd); tbody.appendChild(errTr);
+        return;
+      }
+      sessionsData = data.sessions || data || [];
+      renderSessions(sessionsData);
+    }).catch(function(err) {
+      clearChildren(tbody);
+      var errTr = document.createElement('tr');
+      var errTd = document.createElement('td');
+      errTd.colSpan = 5; errTd.className = 'empty-state';
+      errTd.textContent = 'Failed to load: ' + err.message;
+      errTr.appendChild(errTd); tbody.appendChild(errTr);
+    });
+  }
+
+  function renderSessions(sessions) {
+    var tbody = document.getElementById('sessions-body');
+    clearChildren(tbody);
+
+    if (!sessions.length) {
+      var tr = document.createElement('tr');
+      var td = document.createElement('td');
+      td.colSpan = 5; td.className = 'empty-state'; td.textContent = 'No sessions found';
+      tr.appendChild(td); tbody.appendChild(tr);
+      return;
+    }
+
+    for (var i = 0; i < sessions.length; i++) {
+      var s = sessions[i];
+      var row = document.createElement('tr');
+      row.className = 'session-row';
+      row.setAttribute('data-key', s.key);
+
+      // Title
+      var title = s.derivedTitle || s.title || s.key || 'Untitled';
+      addCell(row, title.length > 60 ? title.substring(0, 60) + '...' : title);
+
+      // Label/type badge
+      var labelTd = document.createElement('td');
+      var badge = document.createElement('span');
+      var lbl = s.label || s.kind || 'unknown';
+      badge.className = 'label-badge label-' + (getLabelClass(lbl));
+      badge.textContent = lbl;
+      labelTd.appendChild(badge);
+      row.appendChild(labelTd);
+
+      // Model
+      var model = s.model || '';
+      addCell(row, model.length > 20 ? model.split('/').pop() : model);
+
+      // Last active
+      addCell(row, s.updatedAt ? timeAgo(s.updatedAt) : s.lastActiveAt ? timeAgo(s.lastActiveAt) : '\u2014');
+
+      // Tokens
+      var tokenTd = addCell(row, s.totalTokens ? formatNumber(s.totalTokens) : '\u2014');
+      tokenTd.style.textAlign = 'right';
+
+      row.addEventListener('click', (function(key, ttl) {
+        return function() { openSession(key, ttl); };
+      })(s.key, title));
+
+      tbody.appendChild(row);
+    }
+  }
+
+  function getLabelClass(label) {
+    label = (label || '').toLowerCase();
+    if (label.indexOf('telegram') >= 0) return 'telegram';
+    if (label.indexOf('cron') >= 0) return 'cron';
+    if (label.indexOf('thread') >= 0) return 'thread';
+    if (label.indexOf('slack') >= 0) return 'slack';
+    return 'default';
+  }
+
+  function openSession(key, title) {
+    selectedSessionKey = key;
+    // Highlight row
+    var rows = document.querySelectorAll('.session-row');
+    for (var i = 0; i < rows.length; i++) {
+      rows[i].classList.toggle('selected', rows[i].getAttribute('data-key') === key);
+    }
+
+    var panel = document.getElementById('chat-panel');
+    panel.classList.add('open');
+    document.getElementById('chat-title').textContent = title || key;
+
+    var msgContainer = document.getElementById('chat-messages');
+    clearChildren(msgContainer);
+    var loadDiv = document.createElement('div');
+    loadDiv.className = 'empty-state';
+    loadDiv.innerHTML = '<span class="spinner"></span> Loading conversation...';
+    msgContainer.appendChild(loadDiv);
+
+    chatSessionKey = key;
+    chatMessages = [];
+
+    fetch('/api/sessions/' + encodeURIComponent(key) + '/history?limit=200')
       .then(function(r) { return r.json(); })
       .then(function(data) {
-        alert(data.ok ? "Test alert sent!" : "Failed: " + JSON.stringify(data));
+        if (data.error) {
+          clearChildren(msgContainer);
+          var errDiv = document.createElement('div');
+          errDiv.className = 'empty-state';
+          errDiv.textContent = 'Error: ' + data.error;
+          msgContainer.appendChild(errDiv);
+          return;
+        }
+        chatMessages = data.messages || data || [];
+        renderChatMessages(chatMessages);
+        document.getElementById('chat-msg-count').textContent = chatMessages.length + ' messages';
+        document.getElementById('chat-load-more').style.display =
+          chatMessages.length >= 200 ? 'inline-block' : 'none';
       })
       .catch(function(err) {
-        alert("Error: " + err.message);
+        clearChildren(msgContainer);
+        var errDiv = document.createElement('div');
+        errDiv.className = 'empty-state';
+        errDiv.textContent = 'Failed: ' + err.message;
+        msgContainer.appendChild(errDiv);
       });
   }
 
-  // --- Helpers ---
+  function renderChatMessages(messages) {
+    var container = document.getElementById('chat-messages');
+    clearChildren(container);
+
+    if (!messages.length) {
+      var emptyDiv = document.createElement('div');
+      emptyDiv.className = 'empty-state';
+      emptyDiv.textContent = 'No messages in this session';
+      container.appendChild(emptyDiv);
+      return;
+    }
+
+    for (var i = 0; i < messages.length; i++) {
+      var m = messages[i];
+      var role = m.role || 'unknown';
+
+      // Tool call entries
+      if (role === 'tool' || m.toolCalls || m.tool_calls) {
+        var toolDiv = document.createElement('div');
+        toolDiv.className = 'tool-call';
+        var calls = m.toolCalls || m.tool_calls || [];
+        if (calls.length) {
+          toolDiv.textContent = '\u{1F527} Tool: ' + calls.map(function(c) { return c.name || c.function?.name || 'unknown'; }).join(', ');
+        } else {
+          toolDiv.textContent = '\u{1F527} Tool result';
+        }
+        if (m.content) {
+          var bodyDiv = document.createElement('div');
+          bodyDiv.className = 'tool-call-body';
+          var contentStr = typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 2);
+          bodyDiv.textContent = contentStr.length > 2000 ? contentStr.substring(0, 2000) + '...' : contentStr;
+          toolDiv.appendChild(bodyDiv);
+          toolDiv.addEventListener('click', function() { this.classList.toggle('expanded'); });
+        }
+        container.appendChild(toolDiv);
+        continue;
+      }
+
+      var msgDiv = document.createElement('div');
+      msgDiv.className = 'chat-msg ' + (role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : 'system');
+
+      var roleDiv = document.createElement('div');
+      roleDiv.className = 'chat-msg-role';
+      roleDiv.textContent = role;
+      msgDiv.appendChild(roleDiv);
+
+      var contentDiv = document.createElement('div');
+      contentDiv.className = 'chat-msg-content';
+      var text = typeof m.content === 'string' ? m.content : (m.text || JSON.stringify(m.content || ''));
+      contentDiv.textContent = text.length > 5000 ? text.substring(0, 5000) + '\n\n... (truncated)' : text;
+      msgDiv.appendChild(contentDiv);
+
+      // Render tool_calls on assistant messages
+      if (role === 'assistant' && (m.toolCalls || m.tool_calls)) {
+        var tc = m.toolCalls || m.tool_calls;
+        for (var j = 0; j < tc.length; j++) {
+          var tcDiv = document.createElement('div');
+          tcDiv.className = 'tool-call';
+          tcDiv.textContent = '\u{1F527} ' + (tc[j].name || tc[j].function?.name || 'tool call');
+          if (tc[j].arguments || tc[j].input) {
+            var tbDiv = document.createElement('div');
+            tbDiv.className = 'tool-call-body';
+            tbDiv.textContent = JSON.stringify(tc[j].arguments || tc[j].input, null, 2);
+            tcDiv.appendChild(tbDiv);
+            tcDiv.addEventListener('click', function() { this.classList.toggle('expanded'); });
+          }
+          msgDiv.appendChild(tcDiv);
+        }
+      }
+
+      container.appendChild(msgDiv);
+    }
+
+    // Scroll to bottom
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function loadMoreMessages() {
+    if (!chatSessionKey) return;
+    fetch('/api/sessions/' + encodeURIComponent(chatSessionKey) + '/history?limit=1000')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        chatMessages = data.messages || data || [];
+        renderChatMessages(chatMessages);
+        document.getElementById('chat-msg-count').textContent = chatMessages.length + ' messages';
+        document.getElementById('chat-load-more').style.display = 'none';
+      });
+  }
+
+  function closeChatPanel() {
+    document.getElementById('chat-panel').classList.remove('open');
+    selectedSessionKey = null;
+    var rows = document.querySelectorAll('.session-row');
+    for (var i = 0; i < rows.length; i++) rows[i].classList.remove('selected');
+  }
+
+  // Allow Enter to search
+  document.getElementById('session-search').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') loadSessions();
+  });
+
+  // ========================================
+  // MEMORY TAB
+  // ========================================
+  var memoryFilesList = [];
+  var selectedMemoryFile = null;
+
+  function loadMemoryFiles() {
+    var container = document.getElementById('memory-file-list');
+    clearChildren(container);
+    var loadSpan = document.createElement('span');
+    loadSpan.className = 'meta';
+    loadSpan.innerHTML = '<span class="spinner"></span> Loading...';
+    container.appendChild(loadSpan);
+
+    // Get workspace files and filter for memory-related ones
+    fetch('/api/files').then(function(r) { return r.json(); }).then(function(data) {
+      if (data.error) {
+        clearChildren(container);
+        var errSpan = document.createElement('span');
+        errSpan.className = 'meta';
+        errSpan.textContent = 'Error: ' + data.error;
+        container.appendChild(errSpan);
+        return;
+      }
+
+      var files = data.files || [];
+      // Show MEMORY.md prominently, then daily memory files, then other .md files
+      var memoryFiles = [];
+      var otherFiles = [];
+      for (var i = 0; i < files.length; i++) {
+        var f = files[i];
+        var name = f.name || '';
+        if (name === 'MEMORY.md' || name.match(/^memory\//)) {
+          memoryFiles.push(f);
+        } else if (name.endsWith('.md') || name.endsWith('.json')) {
+          otherFiles.push(f);
+        }
+      }
+
+      memoryFilesList = memoryFiles.concat(otherFiles);
+      renderMemoryFiles(memoryFilesList);
+    }).catch(function(err) {
+      clearChildren(container);
+      var errSpan = document.createElement('span');
+      errSpan.className = 'meta';
+      errSpan.textContent = 'Failed: ' + err.message;
+      container.appendChild(errSpan);
+    });
+  }
+
+  function renderMemoryFiles(files) {
+    var container = document.getElementById('memory-file-list');
+    clearChildren(container);
+
+    if (!files.length) {
+      var emptySpan = document.createElement('span');
+      emptySpan.className = 'meta';
+      emptySpan.textContent = 'No memory files found';
+      container.appendChild(emptySpan);
+      return;
+    }
+
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      var btn = document.createElement('button');
+      btn.className = 'memory-file-btn';
+      btn.textContent = f.name;
+      btn.setAttribute('data-name', f.name);
+      btn.addEventListener('click', (function(name) {
+        return function() { openMemoryFile(name); };
+      })(f.name));
+      container.appendChild(btn);
+    }
+  }
+
+  function openMemoryFile(name) {
+    selectedMemoryFile = name;
+    // Highlight button
+    var btns = document.querySelectorAll('.memory-file-btn');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.toggle('selected', btns[i].getAttribute('data-name') === name);
+    }
+
+    var viewer = document.getElementById('memory-content');
+    viewer.style.display = 'block';
+    viewer.textContent = 'Loading...';
+
+    fetch('/api/files/' + encodeURIComponent(name))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.error) {
+          viewer.textContent = 'Error: ' + data.error;
+          return;
+        }
+        var content = data.file ? data.file.content : data.content || '';
+        viewer.textContent = content || '(empty file)';
+      })
+      .catch(function(err) {
+        viewer.textContent = 'Failed: ' + err.message;
+      });
+  }
+
+  function searchMemory() {
+    var query = document.getElementById('memory-search').value.trim();
+    if (!query) return;
+
+    var resultsDiv = document.getElementById('memory-search-results');
+    var contentDiv = document.getElementById('memory-results-content');
+    resultsDiv.style.display = 'block';
+    contentDiv.textContent = 'Searching...';
+
+    fetch('/api/memory-search?q=' + encodeURIComponent(query))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.error) {
+          contentDiv.textContent = 'Error: ' + data.error;
+          return;
+        }
+        // Console API returns { output, error, exitCode }
+        var output = data.output || data.result || JSON.stringify(data, null, 2);
+        contentDiv.textContent = output || 'No results';
+      })
+      .catch(function(err) {
+        contentDiv.textContent = 'Failed: ' + err.message;
+      });
+  }
+
+  document.getElementById('memory-search').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') searchMemory();
+  });
+
+  // ========================================
+  // FILES TAB
+  // ========================================
+  var workspaceFiles = [];
+  var currentEditFile = null;
+  var originalContent = '';
+
+  function loadFiles() {
+    var container = document.getElementById('file-list');
+    clearChildren(container);
+    var loadSpan = document.createElement('span');
+    loadSpan.className = 'meta';
+    loadSpan.innerHTML = '<span class="spinner"></span> Loading...';
+    container.appendChild(loadSpan);
+
+    fetch('/api/files').then(function(r) { return r.json(); }).then(function(data) {
+      if (data.error) {
+        clearChildren(container);
+        var errSpan = document.createElement('span');
+        errSpan.className = 'meta';
+        errSpan.textContent = 'Error: ' + data.error;
+        container.appendChild(errSpan);
+        return;
+      }
+
+      workspaceFiles = data.files || [];
+      renderFiles(workspaceFiles);
+    }).catch(function(err) {
+      clearChildren(container);
+      var errSpan = document.createElement('span');
+      errSpan.className = 'meta';
+      errSpan.textContent = 'Failed: ' + err.message;
+      container.appendChild(errSpan);
+    });
+  }
+
+  function renderFiles(files) {
+    var container = document.getElementById('file-list');
+    clearChildren(container);
+
+    if (!files.length) {
+      var emptySpan = document.createElement('span');
+      emptySpan.className = 'meta';
+      emptySpan.textContent = 'No workspace files found';
+      container.appendChild(emptySpan);
+      return;
+    }
+
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      var card = document.createElement('div');
+      card.className = 'file-card';
+      card.setAttribute('data-name', f.name);
+
+      var nameDiv = document.createElement('div');
+      nameDiv.className = 'file-card-name';
+      nameDiv.textContent = f.name;
+      card.appendChild(nameDiv);
+
+      var metaDiv = document.createElement('div');
+      metaDiv.className = 'file-card-meta';
+      var parts = [];
+      if (f.size != null) parts.push(formatFileSize(f.size));
+      if (f.updatedAtMs) parts.push(timeAgo(new Date(f.updatedAtMs).toISOString()));
+      metaDiv.textContent = parts.join(' \u00B7 ');
+      card.appendChild(metaDiv);
+
+      card.addEventListener('click', (function(name) {
+        return function() { openFileEditor(name); };
+      })(f.name));
+
+      container.appendChild(card);
+    }
+  }
+
+  function openFileEditor(name) {
+    currentEditFile = name;
+
+    // Highlight card
+    var cards = document.querySelectorAll('.file-card');
+    for (var i = 0; i < cards.length; i++) {
+      cards[i].classList.toggle('selected', cards[i].getAttribute('data-name') === name);
+    }
+
+    var editor = document.getElementById('editor-container');
+    editor.classList.add('open');
+    document.getElementById('editor-filename').textContent = name;
+    document.getElementById('editor-status').textContent = 'Loading...';
+
+    var textarea = document.getElementById('editor-textarea');
+    textarea.value = '';
+    textarea.disabled = true;
+
+    fetch('/api/files/' + encodeURIComponent(name))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.error) {
+          document.getElementById('editor-status').textContent = 'Error: ' + data.error;
+          return;
+        }
+        var content = data.file ? data.file.content : data.content || '';
+        textarea.value = content;
+        textarea.disabled = false;
+        originalContent = content;
+        document.getElementById('editor-status').textContent = '';
+      })
+      .catch(function(err) {
+        document.getElementById('editor-status').textContent = 'Failed: ' + err.message;
+      });
+  }
+
+  function reloadFile() {
+    if (currentEditFile) openFileEditor(currentEditFile);
+  }
+
+  function saveFile() {
+    if (!currentEditFile) return;
+    var textarea = document.getElementById('editor-textarea');
+    var content = textarea.value;
+
+    if (content === originalContent) {
+      document.getElementById('editor-status').textContent = 'No changes';
+      setTimeout(function() { document.getElementById('editor-status').textContent = ''; }, 2000);
+      return;
+    }
+
+    if (!window.confirm('Save changes to ' + currentEditFile + '?')) return;
+
+    var statusEl = document.getElementById('editor-status');
+    var saveBtn = document.getElementById('save-btn');
+    statusEl.textContent = 'Saving...';
+    saveBtn.disabled = true;
+
+    fetch('/api/files/' + encodeURIComponent(currentEditFile), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: content }),
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        saveBtn.disabled = false;
+        if (data.error) {
+          statusEl.textContent = 'Error: ' + data.error;
+          return;
+        }
+        originalContent = content;
+        statusEl.textContent = '\u2713 Saved';
+        statusEl.style.color = '#22c55e';
+        saveBtn.className = 'btn btn-success';
+        setTimeout(function() {
+          statusEl.textContent = '';
+          statusEl.style.color = '';
+          saveBtn.className = 'btn btn-primary';
+        }, 3000);
+      })
+      .catch(function(err) {
+        saveBtn.disabled = false;
+        statusEl.textContent = 'Failed: ' + err.message;
+      });
+  }
+
+  // ========================================
+  // HELPERS
+  // ========================================
   function clearChildren(el) {
     while (el.firstChild) el.removeChild(el.firstChild);
   }
 
+  function addCell(row, text) {
+    var td = document.createElement('td');
+    td.textContent = text;
+    row.appendChild(td);
+    return td;
+  }
+
   function timeAgo(iso) {
     var diff = (Date.now() - new Date(iso).getTime()) / 1000;
-    if (diff < 60) return Math.floor(diff) + "s ago";
-    if (diff < 3600) return Math.floor(diff / 60) + "m ago";
-    if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
-    return Math.floor(diff / 86400) + "d ago";
+    if (diff < 0) return 'just now';
+    if (diff < 60) return Math.floor(diff) + 's ago';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
   }
 
   function formatTime(iso) {
     var d = new Date(iso);
-    return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   }
 
-  // --- Auto-refresh sparkline + heatmap periodically ---
+  function formatNumber(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return String(n);
+  }
+
+  function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  // --- Auto-refresh sparkline + heatmap + gateway status ---
   setInterval(function() {
     Promise.all([
-      fetch("/api/health?hours=24").then(function(r) { return r.json(); }),
-      fetch("/api/heatmap").then(function(r) { return r.json(); }),
+      fetch('/api/health?hours=24').then(function(r) { return r.json(); }),
+      fetch('/api/heatmap').then(function(r) { return r.json(); }),
+      fetch('/api/gateway-status').then(function(r) { return r.json(); }),
     ]).then(function(results) {
       renderSparkline(results[0]);
       renderHeatmap(results[1]);
+      updateGatewayDot(results[2]);
     }).catch(function() {});
   }, 60000);
 
   // --- Boot ---
-  loadInitial();
+  tabLoaded.monitor = true;
+  loadMonitorData();
   connectSSE();
 </script>
 </body>

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import * as db from "./db.js";
 import { collectHealth, collectLogs, collectDebug } from "./collector.js";
 import { evaluate, sendTestAlert } from "./alerter.js";
+import gateway from "./gateway.js";
 
 const PORT = Number(process.env.PORT) || 9090;
 const HEALTH_INTERVAL = Number(process.env.HEALTH_INTERVAL_MS) || 30_000;
@@ -196,6 +197,123 @@ app.post("/api/test-alert", async (_req, res) => {
   res.json(result);
 });
 
+// --- Gateway proxy routes ---
+
+// Gateway connection status
+app.get("/api/gateway-status", (_req, res) => {
+  res.json(gateway.status());
+});
+
+// List sessions
+app.get("/api/sessions", async (req, res) => {
+  try {
+    const params = {
+      limit: Math.min(200, Math.max(1, Number(req.query.limit) || 50)),
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+    };
+    if (req.query.search) params.search = String(req.query.search);
+    if (req.query.label) params.label = String(req.query.label);
+
+    const result = await gateway.call("sessions.list", params);
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// Get chat history for a session
+app.get("/api/sessions/:key/history", async (req, res) => {
+  try {
+    const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 200));
+    const result = await gateway.call("chat.history", {
+      sessionKey: req.params.key,
+      limit,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// List workspace files
+app.get("/api/files", async (_req, res) => {
+  try {
+    const result = await gateway.call("agents.files.list", { agentId: "main" });
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// Get a single workspace file
+app.get("/api/files/:name", async (req, res) => {
+  try {
+    const result = await gateway.call("agents.files.get", {
+      agentId: "main",
+      name: req.params.name,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// Save a workspace file
+app.put("/api/files/:name", async (req, res) => {
+  try {
+    const { content } = req.body;
+    if (typeof content !== "string") {
+      return res.status(400).json({ error: "content must be a string" });
+    }
+    const result = await gateway.call("agents.files.set", {
+      agentId: "main",
+      name: req.params.name,
+      content,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// Get gateway config
+app.get("/api/config", async (_req, res) => {
+  try {
+    const result = await gateway.call("config.get", {});
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// Memory search via Xavier's console API
+app.get("/api/memory-search", async (req, res) => {
+  try {
+    const query = String(req.query.q || "");
+    if (!query) return res.status(400).json({ error: "q parameter required" });
+
+    const tsUrl = process.env.XAVIER_TAILSCALE_URL;
+    const setupPw = process.env.SETUP_PASSWORD;
+    if (!tsUrl || !setupPw) {
+      return res.status(503).json({ error: "Xavier Tailscale URL or SETUP_PASSWORD not configured" });
+    }
+
+    const resp = await fetch(`${tsUrl}/setup/api/console/run`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Basic " + Buffer.from("admin:" + setupPw).toString("base64"),
+      },
+      body: JSON.stringify({ cmd: "openclaw.memory.search", arg: query }),
+    });
+    const data = await resp.json();
+    res.json(data);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // --- Collection loops ---
 
 async function healthLoop() {
@@ -252,6 +370,15 @@ async function main() {
 
   // Start Tailscale
   await startTailscale();
+
+  // Connect to Xavier's gateway WebSocket
+  gateway.connect();
+  gateway.on("connected", (info) => {
+    console.log(`[xavier-monitor] gateway connected (${info.server?.version || "?"})`);
+  });
+  gateway.on("disconnected", () => {
+    console.log("[xavier-monitor] gateway disconnected, will reconnect...");
+  });
 
   // Start Express
   app.listen(PORT, () => {
