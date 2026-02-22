@@ -285,16 +285,19 @@ function startMonitor() {
 async function exposeMonitorOnTailscale() {
   if (!TS_AUTHKEY || !monitorProc) return;
 
-  // Serve the monitor on port 9091 over the tailnet.
-  // This makes it reachable at https://xavier:9091 from any tailnet device.
+  // Expose the monitor at /monitor on the existing HTTPS port (443).
+  // Tailscale userspace-networking mode doesn't support --https on non-443 ports,
+  // so we use path-based routing instead.  Tailscale strips the /monitor prefix
+  // before forwarding to the backend; the dashboard's JS derives API from
+  // location.pathname so it works behind any prefix.
   const serve = await runCmd("tailscale", [
     "--socket", TS_SOCKET,
     "serve", "--bg",
-    `--https=${MONITOR_PORT}`,
+    "--set-path", "/monitor",
     `http://localhost:${MONITOR_PORT}`,
   ]);
   if (serve.code === 0) {
-    console.log(`[monitor] exposed on tailnet at https://${TS_HOSTNAME}:${MONITOR_PORT}`);
+    console.log(`[monitor] exposed on tailnet at https://${TS_HOSTNAME}/monitor`);
   } else {
     console.error(`[monitor] tailscale serve failed: ${serve.output}`);
   }
