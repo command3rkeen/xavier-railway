@@ -102,6 +102,10 @@ const TS_HOSTNAME = process.env.TS_HOSTNAME?.trim() || "xavier";
 const TS_STATE_DIR = path.join("/data", "tailscale");
 const TS_SOCKET = path.join(TS_STATE_DIR, "tailscaled.sock");
 
+// Monitoring dashboard (optional — tailnet-only admin UI)
+const MONITOR_PORT = Number.parseInt(process.env.MONITOR_PORT ?? "9091", 10);
+const MONITOR_DB_PATH = process.env.MONITOR_DB_PATH || path.join(STATE_DIR, "xavier-monitor.db");
+
 function clawArgs(args) {
   return [OPENCLAW_ENTRY, ...args];
 }
@@ -216,6 +220,86 @@ async function startTailscale() {
   }
 }
 // ──── End Tailscale ───────────────────────────────────────────────────────
+
+// ──── Monitoring Dashboard (tailnet-only admin UI) ────────────────────────
+let monitorProc = null;
+
+function startMonitor() {
+  if (monitorProc) return;
+
+  // The monitoring service needs device credentials to authenticate with the
+  // gateway as a paired device (operator scopes).  If none are set, skip —
+  // the dashboard won't be able to call RPC methods anyway.
+  if (!process.env.GATEWAY_DEVICE_ID || !process.env.GATEWAY_DEVICE_TOKEN) {
+    console.log("[monitor] skipping — GATEWAY_DEVICE_ID / GATEWAY_DEVICE_TOKEN not set");
+    return;
+  }
+
+  const monitorEntry = path.resolve("monitoring/src/server.js");
+  if (!fs.existsSync(monitorEntry)) {
+    console.log("[monitor] skipping — monitoring/src/server.js not found");
+    return;
+  }
+
+  console.log(`[monitor] starting on :${MONITOR_PORT}...`);
+
+  // Pass only the env vars the monitor needs — principle of least privilege.
+  // Notably, TS_AUTHKEY is NOT passed: the wrapper handles Tailscale exposure,
+  // so the monitor skips its own startTailscale() and binds to 127.0.0.1 only.
+  monitorProc = childProcess.spawn("node", [monitorEntry], {
+    stdio: "inherit",
+    env: {
+      // Basics (Node needs PATH, HOME, etc.)
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      NODE_ENV: process.env.NODE_ENV || "production",
+      // Monitor config
+      PORT: String(MONITOR_PORT),
+      DB_PATH: MONITOR_DB_PATH,
+      // Gateway connection (localhost, same container)
+      XAVIER_TAILSCALE_HOST: INTERNAL_GATEWAY_HOST,
+      GATEWAY_PORT: String(INTERNAL_GATEWAY_PORT),
+      // Device credentials for gateway RPC auth
+      GATEWAY_DEVICE_ID: process.env.GATEWAY_DEVICE_ID,
+      GATEWAY_DEVICE_TOKEN: process.env.GATEWAY_DEVICE_TOKEN,
+      GATEWAY_DEVICE_PUBKEY: process.env.GATEWAY_DEVICE_PUBKEY || "",
+      GATEWAY_DEVICE_PRIVKEY: process.env.GATEWAY_DEVICE_PRIVKEY || "",
+      // Health probe target (wrapper's own /healthz)
+      XAVIER_URL: `http://localhost:${PORT}`,
+      // Monitor auth (optional — if set in Railway env)
+      MONITOR_PASSWORD: process.env.MONITOR_PASSWORD || "",
+    },
+  });
+
+  monitorProc.on("error", (err) => {
+    console.error(`[monitor] spawn error: ${err}`);
+    monitorProc = null;
+  });
+
+  monitorProc.on("exit", (code, signal) => {
+    console.error(`[monitor] exited code=${code} signal=${signal}`);
+    monitorProc = null;
+  });
+}
+
+async function exposeMonitorOnTailscale() {
+  if (!TS_AUTHKEY || !monitorProc) return;
+
+  // Serve the monitor on port 9091 over the tailnet.
+  // This makes it reachable at https://xavier:9091 from any tailnet device.
+  const serve = await runCmd("tailscale", [
+    "--socket", TS_SOCKET,
+    "serve", "--bg",
+    `--https=${MONITOR_PORT}`,
+    `http://localhost:${MONITOR_PORT}`,
+  ]);
+  if (serve.code === 0) {
+    console.log(`[monitor] exposed on tailnet at https://${TS_HOSTNAME}:${MONITOR_PORT}`);
+  } else {
+    console.error(`[monitor] tailscale serve failed: ${serve.output}`);
+  }
+}
+// ──── End Monitoring ──────────────────────────────────────────────────────
 
 async function waitForGatewayReady(opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 20_000;
@@ -482,6 +566,10 @@ app.get("/healthz", async (_req, res) => {
       enabled: Boolean(TS_AUTHKEY),
       running: Boolean(tailscaleProc),
       hostname: TS_HOSTNAME,
+    },
+    monitor: {
+      running: Boolean(monitorProc),
+      port: MONITOR_PORT,
     },
   });
 });
@@ -1857,6 +1945,29 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     try {
       await ensureGatewayRunning();
       console.log("[wrapper] gateway ready");
+
+      // Start the monitoring dashboard once the gateway is up.
+      // It connects to the gateway via localhost WebSocket RPC.
+      startMonitor();
+
+      // Wait for the monitor to bind its port, then expose on tailnet.
+      // Probe /healthz instead of a fixed timeout to avoid race conditions.
+      (async () => {
+        for (let i = 0; i < 20; i++) {
+          await sleep(500);
+          if (!monitorProc) return; // process died, give up
+          try {
+            const r = await fetch(`http://localhost:${MONITOR_PORT}/healthz`);
+            if (r.ok) {
+              await exposeMonitorOnTailscale();
+              return;
+            }
+          } catch { /* not ready yet */ }
+        }
+        console.error("[monitor] gave up waiting for monitor to become ready");
+      })().catch((err) => {
+        console.error(`[monitor] tailscale expose failed: ${String(err)}`);
+      });
     } catch (err) {
       console.error(`[wrapper] gateway failed to start at boot: ${String(err)}`);
     }
@@ -1879,6 +1990,11 @@ server.on("upgrade", async (req, socket, head) => {
 
 process.on("SIGTERM", () => {
   // Best-effort shutdown
+  try {
+    if (monitorProc) monitorProc.kill("SIGTERM");
+  } catch {
+    // ignore
+  }
   try {
     if (tailscaleProc) tailscaleProc.kill("SIGTERM");
   } catch {

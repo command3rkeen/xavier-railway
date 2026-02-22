@@ -75,6 +75,11 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"'
 COPY src ./src
 COPY config ./config
 
+# Monitoring dashboard (admin UI over tailnet)
+COPY monitoring/package.json monitoring/package.json
+RUN cd monitoring && npm install --omit=dev && npm cache clean --force
+COPY monitoring/src monitoring/src
+
 # The wrapper listens on this port.
 ENV OPENCLAW_PUBLIC_PORT=8080
 ENV PORT=8080

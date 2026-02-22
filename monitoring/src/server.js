@@ -381,8 +381,11 @@ async function main() {
   });
 
   // Start Express
-  app.listen(PORT, () => {
-    console.log(`[xavier-monitor] dashboard at http://localhost:${PORT}`);
+  // Bind to loopback only — external access comes via Tailscale serve reverse proxy.
+  // When running inside the Railway wrapper, the wrapper's exposeMonitorOnTailscale()
+  // runs `tailscale serve --https=9091 http://localhost:9091`.
+  app.listen(PORT, "127.0.0.1", () => {
+    console.log(`[xavier-monitor] dashboard at http://127.0.0.1:${PORT}`);
   });
 
   // Start collection loops
