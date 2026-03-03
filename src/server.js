@@ -2240,52 +2240,53 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
         console.error(`[monitor] tailscale expose failed: ${String(err)}`);
       });
 
-      // ── Vault / KB services (after gateway + monitor are up) ───────
-      initVault();
-
-      // Start Quartz KB → probe health → expose on tailnet
-      startQuartz();
-      (async () => {
-        for (let i = 0; i < 30; i++) {
-          await sleep(1000);
-          if (!quartzProc) return;
-          try {
-            const r = await fetch(`http://localhost:${QUARTZ_PORT}`);
-            if (r.ok) {
-              await exposeKBOnTailscale();
-              return;
-            }
-          } catch { /* not ready yet */ }
-        }
-        console.error("[quartz] gave up waiting for Quartz to become ready");
-      })().catch((err) => {
-        console.error(`[quartz] tailscale expose failed: ${String(err)}`);
-      });
-
-      // Start SilverBullet → auth proxy → probe health → expose on tailnet
-      startSilverBullet();
-      startVaultAuthProxy();
-      (async () => {
-        for (let i = 0; i < 30; i++) {
-          await sleep(1000);
-          if (!vaultAuthProxyProc) return;
-          try {
-            const r = await fetch(`http://localhost:${VAULT_AUTH_PROXY_PORT}/healthz`);
-            if (r.ok) {
-              await exposeEditorOnTailscale();
-              return;
-            }
-          } catch { /* not ready yet */ }
-        }
-        console.error("[silverbullet] gave up waiting for auth proxy to become ready");
-      })().catch((err) => {
-        console.error(`[silverbullet] tailscale expose failed: ${String(err)}`);
-      });
-
     } catch (err) {
       console.error(`[wrapper] gateway failed to start at boot: ${String(err)}`);
     }
   }
+
+  // ── Vault / KB services (independent of gateway) ─────────────────
+  // These don't need the gateway — start them even if gateway failed.
+  initVault();
+
+  // Start Quartz KB → probe health → expose on tailnet
+  startQuartz();
+  (async () => {
+    for (let i = 0; i < 30; i++) {
+      await sleep(1000);
+      if (!quartzProc) return;
+      try {
+        const r = await fetch(`http://localhost:${QUARTZ_PORT}`);
+        if (r.ok) {
+          await exposeKBOnTailscale();
+          return;
+        }
+      } catch { /* not ready yet */ }
+    }
+    console.error("[quartz] gave up waiting for Quartz to become ready");
+  })().catch((err) => {
+    console.error(`[quartz] tailscale expose failed: ${String(err)}`);
+  });
+
+  // Start SilverBullet → auth proxy → probe health → expose on tailnet
+  startSilverBullet();
+  startVaultAuthProxy();
+  (async () => {
+    for (let i = 0; i < 30; i++) {
+      await sleep(1000);
+      if (!vaultAuthProxyProc) return;
+      try {
+        const r = await fetch(`http://localhost:${VAULT_AUTH_PROXY_PORT}/healthz`);
+        if (r.ok) {
+          await exposeEditorOnTailscale();
+          return;
+        }
+      } catch { /* not ready yet */ }
+    }
+    console.error("[silverbullet] gave up waiting for auth proxy to become ready");
+  })().catch((err) => {
+    console.error(`[silverbullet] tailscale expose failed: ${String(err)}`);
+  });
 });
 
 server.on("upgrade", async (req, socket, head) => {
