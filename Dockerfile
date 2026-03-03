@@ -80,6 +80,20 @@ COPY monitoring/package.json monitoring/package.json
 RUN cd monitoring && npm install --omit=dev && npm cache clean --force
 COPY monitoring/src monitoring/src
 
+# QMD (hybrid search backend for vault memory)
+RUN npm install -g @tobilu/qmd
+
+# Quartz v4 (static KB site — renders vault as browsable wiki)
+ARG QUARTZ_GIT_REF=v4
+RUN git clone --depth 1 --branch "${QUARTZ_GIT_REF}" \
+      https://github.com/jackyzha0/quartz.git /quartz \
+  && cd /quartz && npm ci
+
+# Deno runtime (for SilverBullet editor)
+RUN curl -fsSL https://deno.land/install.sh | sh
+ENV DENO_DIR="/root/.deno"
+ENV PATH="${DENO_DIR}/bin:${PATH}"
+
 # The wrapper listens on this port.
 ENV OPENCLAW_PUBLIC_PORT=8080
 ENV PORT=8080

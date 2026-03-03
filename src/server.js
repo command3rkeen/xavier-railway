@@ -106,6 +106,12 @@ const TS_SOCKET = path.join(TS_STATE_DIR, "tailscaled.sock");
 const MONITOR_PORT = Number.parseInt(process.env.MONITOR_PORT ?? "9091", 10);
 const MONITOR_DB_PATH = process.env.MONITOR_DB_PATH || path.join(STATE_DIR, "xavier-monitor.db");
 
+// Knowledge base / vault services (optional — controlled by env vars)
+const VAULT_DIR = process.env.VAULT_DIR?.trim() || "/data/vault";
+const QUARTZ_PORT = Number.parseInt(process.env.QUARTZ_PORT ?? "9092", 10);
+const SB_PORT = Number.parseInt(process.env.SB_PORT ?? "9093", 10);
+const VAULT_AUTH_PROXY_PORT = Number.parseInt(process.env.VAULT_AUTH_PROXY_PORT ?? "9094", 10);
+
 function clawArgs(args) {
   return [OPENCLAW_ENTRY, ...args];
 }
@@ -303,6 +309,246 @@ async function exposeMonitorOnTailscale() {
   }
 }
 // ──── End Monitoring ──────────────────────────────────────────────────────
+
+// ──── Vault / Knowledge Base Services ────────────────────────────────────
+let quartzProc = null;
+let silverBulletProc = null;
+let vaultAuthProxyProc = null;
+
+const VAULT_INDEX_CONTENT = `---
+title: G2X Knowledge Base
+---
+
+# G2X Knowledge Base
+
+Welcome to the G2X internal knowledge base.
+
+## Sections
+
+- **[Company](/company)** — SOPs, documentation, meeting notes, reports, and templates
+- **[Personal](/personal)** — Your private workspace (only visible to you)
+
+---
+
+*Powered by [Quartz](https://quartz.jzhao.xyz/) · Edited with [SilverBullet](https://silverbullet.md/)*
+`;
+
+const SB_SETTINGS_CONTENT = `This page contains SilverBullet settings for the G2X vault.
+
+\`\`\`space-style
+/* G2X Editor Theme */
+:root {
+  --editor-font: "Inter", sans-serif;
+  --editor-width: 900px;
+  --ui-accent-color: #0f4c81;
+}
+
+html[data-theme="dark"] {
+  --ui-accent-color: #4da6ff;
+}
+
+/* Header styling */
+#sb-main .cm-editor .sb-line-h1 { color: #0f4c81; }
+#sb-main .cm-editor .sb-line-h2 { color: #1a73e8; }
+\`\`\`
+`;
+
+/**
+ * Ensure the vault directory structure exists with default content.
+ */
+function initVault() {
+  const dirs = [
+    path.join(VAULT_DIR, "company", "sops"),
+    path.join(VAULT_DIR, "company", "docs"),
+    path.join(VAULT_DIR, "company", "meetings"),
+    path.join(VAULT_DIR, "company", "reports"),
+    path.join(VAULT_DIR, "company", "templates"),
+    path.join(VAULT_DIR, "xavier", "memories"),
+    path.join(VAULT_DIR, "xavier", "reflections"),
+    path.join(VAULT_DIR, "personal"),
+  ];
+
+  for (const dir of dirs) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  // Write default index page if missing
+  const indexPath = path.join(VAULT_DIR, "_index.md");
+  if (!fs.existsSync(indexPath)) {
+    fs.writeFileSync(indexPath, VAULT_INDEX_CONTENT, "utf8");
+    console.log("[vault] wrote default _index.md");
+  }
+
+  // Write SilverBullet settings if missing
+  const settingsPath = path.join(VAULT_DIR, "SETTINGS.md");
+  if (!fs.existsSync(settingsPath)) {
+    fs.writeFileSync(settingsPath, SB_SETTINGS_CONTENT, "utf8");
+    console.log("[vault] wrote default SETTINGS.md");
+  }
+
+  // Copy Quartz config if /quartz exists and our config isn't there yet
+  const quartzConfigSrc = path.resolve("config/quartz.config.ts");
+  const quartzConfigDst = path.join("/quartz", "quartz.config.ts");
+  if (fs.existsSync("/quartz") && fs.existsSync(quartzConfigSrc)) {
+    try {
+      fs.copyFileSync(quartzConfigSrc, quartzConfigDst);
+      console.log("[vault] copied quartz.config.ts to /quartz/");
+    } catch (err) {
+      console.error(`[vault] failed to copy quartz config: ${err.message}`);
+    }
+  }
+
+  console.log("[vault] directory structure initialized");
+}
+
+/**
+ * Start the Quartz static site server for the knowledge base.
+ * Only starts if /quartz directory exists (i.e., Quartz was installed in Docker build).
+ */
+function startQuartz() {
+  if (quartzProc) return;
+
+  if (!fs.existsSync("/quartz")) {
+    console.log("[quartz] skipping — /quartz not found (not installed in image)");
+    return;
+  }
+
+  console.log(`[quartz] starting on :${QUARTZ_PORT}...`);
+
+  quartzProc = childProcess.spawn(
+    "npx",
+    ["quartz", "build", "--serve", "--port", String(QUARTZ_PORT), "--directory", VAULT_DIR, "--bind", "127.0.0.1"],
+    {
+      stdio: "inherit",
+      cwd: "/quartz",
+      env: { ...process.env },
+    },
+  );
+
+  quartzProc.on("error", (err) => {
+    console.error(`[quartz] spawn error: ${err}`);
+    quartzProc = null;
+  });
+
+  quartzProc.on("exit", (code, signal) => {
+    console.error(`[quartz] exited code=${code} signal=${signal}`);
+    quartzProc = null;
+  });
+}
+
+/**
+ * Start the SilverBullet web editor.
+ * Only starts if Deno is available (installed in Docker build).
+ */
+function startSilverBullet() {
+  if (silverBulletProc) return;
+
+  // Check if deno is available
+  try {
+    childProcess.execFileSync("deno", ["--version"], { stdio: "ignore" });
+  } catch {
+    console.log("[silverbullet] skipping — deno not found on PATH");
+    return;
+  }
+
+  console.log(`[silverbullet] starting on :${SB_PORT}...`);
+
+  silverBulletProc = childProcess.spawn(
+    "deno",
+    ["run", "-A", "npm:@nichochar/silverbullet", "--port", String(SB_PORT), "--hostname", "127.0.0.1", VAULT_DIR],
+    {
+      stdio: "inherit",
+      env: { ...process.env },
+    },
+  );
+
+  silverBulletProc.on("error", (err) => {
+    console.error(`[silverbullet] spawn error: ${err}`);
+    silverBulletProc = null;
+  });
+
+  silverBulletProc.on("exit", (code, signal) => {
+    console.error(`[silverbullet] exited code=${code} signal=${signal}`);
+    silverBulletProc = null;
+  });
+}
+
+/**
+ * Start the vault auth proxy in front of SilverBullet.
+ */
+function startVaultAuthProxy() {
+  if (vaultAuthProxyProc) return;
+
+  const proxyEntry = path.resolve("src/vault-auth-proxy.js");
+  if (!fs.existsSync(proxyEntry)) {
+    console.log("[vault-auth-proxy] skipping — src/vault-auth-proxy.js not found");
+    return;
+  }
+
+  console.log(`[vault-auth-proxy] starting on :${VAULT_AUTH_PROXY_PORT}...`);
+
+  vaultAuthProxyProc = childProcess.spawn("node", [proxyEntry], {
+    stdio: "inherit",
+    env: {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      NODE_ENV: process.env.NODE_ENV || "production",
+      SB_PORT: String(SB_PORT),
+      PROXY_PORT: String(VAULT_AUTH_PROXY_PORT),
+      VAULT_DIR,
+      VAULT_ADMIN_USERS: process.env.VAULT_ADMIN_USERS || "",
+    },
+  });
+
+  vaultAuthProxyProc.on("error", (err) => {
+    console.error(`[vault-auth-proxy] spawn error: ${err}`);
+    vaultAuthProxyProc = null;
+  });
+
+  vaultAuthProxyProc.on("exit", (code, signal) => {
+    console.error(`[vault-auth-proxy] exited code=${code} signal=${signal}`);
+    vaultAuthProxyProc = null;
+  });
+}
+
+/**
+ * Expose Quartz KB on Tailscale at /kb.
+ */
+async function exposeKBOnTailscale() {
+  if (!TS_AUTHKEY || !quartzProc) return;
+
+  const serve = await runCmd("tailscale", [
+    "--socket", TS_SOCKET,
+    "serve", "--bg",
+    "--set-path", "/kb",
+    `http://localhost:${QUARTZ_PORT}`,
+  ]);
+  if (serve.code === 0) {
+    console.log(`[quartz] exposed on tailnet at https://${TS_HOSTNAME}/kb`);
+  } else {
+    console.error(`[quartz] tailscale serve failed: ${serve.output}`);
+  }
+}
+
+/**
+ * Expose SilverBullet editor on Tailscale at /edit (through the auth proxy).
+ */
+async function exposeEditorOnTailscale() {
+  if (!TS_AUTHKEY || !vaultAuthProxyProc) return;
+
+  const serve = await runCmd("tailscale", [
+    "--socket", TS_SOCKET,
+    "serve", "--bg",
+    "--set-path", "/edit",
+    `http://localhost:${VAULT_AUTH_PROXY_PORT}`,
+  ]);
+  if (serve.code === 0) {
+    console.log(`[silverbullet] exposed on tailnet at https://${TS_HOSTNAME}/edit`);
+  } else {
+    console.error(`[silverbullet] tailscale serve failed: ${serve.output}`);
+  }
+}
+// ──── End Vault / Knowledge Base ─────────────────────────────────────────
 
 async function waitForGatewayReady(opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 20_000;
@@ -589,6 +835,12 @@ app.get("/healthz", async (_req, res) => {
     monitor: {
       running: Boolean(monitorProc),
       port: MONITOR_PORT,
+    },
+    vault: {
+      dir: VAULT_DIR,
+      quartz: { running: Boolean(quartzProc), port: QUARTZ_PORT },
+      silverBullet: { running: Boolean(silverBulletProc), port: SB_PORT },
+      authProxy: { running: Boolean(vaultAuthProxyProc), port: VAULT_AUTH_PROXY_PORT },
     },
   });
 });
@@ -1987,6 +2239,49 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
       })().catch((err) => {
         console.error(`[monitor] tailscale expose failed: ${String(err)}`);
       });
+
+      // ── Vault / KB services (after gateway + monitor are up) ───────
+      initVault();
+
+      // Start Quartz KB → probe health → expose on tailnet
+      startQuartz();
+      (async () => {
+        for (let i = 0; i < 30; i++) {
+          await sleep(1000);
+          if (!quartzProc) return;
+          try {
+            const r = await fetch(`http://localhost:${QUARTZ_PORT}`);
+            if (r.ok) {
+              await exposeKBOnTailscale();
+              return;
+            }
+          } catch { /* not ready yet */ }
+        }
+        console.error("[quartz] gave up waiting for Quartz to become ready");
+      })().catch((err) => {
+        console.error(`[quartz] tailscale expose failed: ${String(err)}`);
+      });
+
+      // Start SilverBullet → auth proxy → probe health → expose on tailnet
+      startSilverBullet();
+      startVaultAuthProxy();
+      (async () => {
+        for (let i = 0; i < 30; i++) {
+          await sleep(1000);
+          if (!vaultAuthProxyProc) return;
+          try {
+            const r = await fetch(`http://localhost:${VAULT_AUTH_PROXY_PORT}/healthz`);
+            if (r.ok) {
+              await exposeEditorOnTailscale();
+              return;
+            }
+          } catch { /* not ready yet */ }
+        }
+        console.error("[silverbullet] gave up waiting for auth proxy to become ready");
+      })().catch((err) => {
+        console.error(`[silverbullet] tailscale expose failed: ${String(err)}`);
+      });
+
     } catch (err) {
       console.error(`[wrapper] gateway failed to start at boot: ${String(err)}`);
     }
@@ -2008,21 +2303,20 @@ server.on("upgrade", async (req, socket, head) => {
 });
 
 process.on("SIGTERM", () => {
-  // Best-effort shutdown
-  try {
-    if (monitorProc) monitorProc.kill("SIGTERM");
-  } catch {
-    // ignore
-  }
-  try {
-    if (tailscaleProc) tailscaleProc.kill("SIGTERM");
-  } catch {
-    // ignore
-  }
-  try {
-    if (gatewayProc) gatewayProc.kill("SIGTERM");
-  } catch {
-    // ignore
+  // Best-effort shutdown — kill child processes in reverse startup order
+  for (const [, proc] of [
+    ["vault-auth-proxy", vaultAuthProxyProc],
+    ["silverbullet", silverBulletProc],
+    ["quartz", quartzProc],
+    ["monitor", monitorProc],
+    ["tailscale", tailscaleProc],
+    ["gateway", gatewayProc],
+  ]) {
+    try {
+      if (proc) proc.kill("SIGTERM");
+    } catch {
+      // ignore
+    }
   }
   process.exit(0);
 });
